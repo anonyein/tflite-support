@@ -1,4 +1,4 @@
-name: Build TFLite Support AAR using Docker
+name: Build TFLite Support AAR using Docker (Final)
 
 on:
   push:
@@ -83,11 +83,28 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # 克隆 TensorFlow 源码（需要修补 android_configure.bzl）
+      - name: Clone TensorFlow source
+        run: |
+          git clone https://github.com/tensorflow/tensorflow.git tensorflow_src
+          cd tensorflow_src
+          git checkout 777924f5575e7e6e22e4f47be211c2a94f59c4f5
+          cd ..
+
+      # 修补 android_configure.bzl，强制使用数字 NDK 版本 23
+      - name: Patch android_configure.bzl
+        run: |
+          # 替换第71行，将版本解析强制设为 23
+          sed -i '71s/.*/    ndk_version = 23/' tensorflow_src/third_party/android/android_configure.bzl
+          # 验证修改
+          grep -n "ndk_version =" tensorflow_src/third_party/android/android_configure.bzl
+
       # 在容器内运行构建
       - name: Run build inside container
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
+            -v ${{ github.workspace }}/tensorflow_src:/tensorflow_src \
             -w /workspace \
             tflite-builder:latest \
             bash -c "
@@ -102,7 +119,7 @@ jobs:
                 yes '' | python3 configure.py
               fi
 
-              # 创建 Android 平台定义（使用 printf 避免 heredoc 问题）
+              # 创建 Android 平台定义
               mkdir -p platform
               printf '%s\n' \\
                 'platform(' \\
@@ -137,13 +154,14 @@ jobs:
               # 计算 Python 库路径
               PYTHON_LIB_PATH=\$(python3 -c 'import site; print(site.getsitepackages()[0])')
 
-              # 执行 Bazel 构建
+              # 执行 Bazel 构建，使用本地修补的 TensorFlow 源码覆盖
               bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
                 --android_platforms=//platform:android_arm64_v8a,//platform:android_armeabi_v7a,//platform:android_x86,//platform:android_x86_64 \
                 --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
                 --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
                 --repo_env=PYTHON_LIB_PATH=\$PYTHON_LIB_PATH \
                 --repo_env=TF_PYTHON_VERSION=3.12 \
+                --override_repository=org_tensorflow=/tensorflow_src \
                 --curses=no \
                 --show_timestamps \
                 --verbose_failures
