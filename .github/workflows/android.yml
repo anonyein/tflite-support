@@ -26,11 +26,14 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      # 移除 .bazelversion 以强制使用我们指定的 Bazel 7.0.0
+      # 强制删除 .bazelversion 文件，防止覆盖 Bazel 版本
       - name: Remove .bazelversion
         run: |
           if [ -f .bazelversion ]; then
             rm -v .bazelversion
+            echo "Removed .bazelversion"
+          else
+            echo "No .bazelversion found"
           fi
 
       - name: Setup Java 17
@@ -44,6 +47,10 @@ jobs:
         uses: bazel-contrib/setup-bazel@0.9.0
         with:
           bazel-version: 7.0.0
+
+      # 验证 Bazel 版本
+      - name: Verify Bazel version
+        run: bazel --version
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -65,11 +72,13 @@ jobs:
       - name: Patch BUILD file to use correct rules_java load path
         run: |
           sed -i 's|//third_party/bazel_rules/rules_java/java:defs.bzl|@rules_java//java:defs.bzl|' tensorflow_lite_support/java/BUILD
+          echo "Patched BUILD file"
 
       # 修补 third_party/repo.bzl 中的 to_list() 错误（flatbuffers 拉取失败问题）
       - name: Patch third_party/repo.bzl to fix flatbuffers fetch
         run: |
           sed -i 's/\.to_list()//g' third_party/repo.bzl
+          echo "Patched third_party/repo.bzl"
 
       # 创建 Android 平台定义（符合 Bazel 7.0+ 规范）
       - name: Create Android platform definitions
