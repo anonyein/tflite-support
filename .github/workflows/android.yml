@@ -1,4 +1,4 @@
-name: Build TFLite Support AAR (Fixed Indent)
+name: Build TFLite Support AAR (Final Working)
 
 on:
   push:
@@ -69,37 +69,27 @@ jobs:
 
           cd /workspace
 
-          # Clone TensorFlow
+          # Clone TensorFlow with submodules
           git clone --recursive https://github.com/tensorflow/tensorflow.git tensorflow_src
           cd tensorflow_src
           git checkout 777924f5575e7e6e22e4f47be211c2a94f59c4f5
           git submodule update --init --recursive
           touch unused
-          sed -i '71s/.*/    ndk_version = 23/' third_party/android/android_configure.bzl
 
-          # Patch repo.bzl
-          cat > /tmp/patch_repo.py <<'PY_EOF'
-          import re
-          with open("third_party/repo.bzl", "r") as f:
-              content = f.read()
-          pattern = r'(ctx\\.symlink\\(ctx\\.path\\(ctx\\.attr\\._root\\)\\.dirname\\.get_child\\(ctx\\.attr\\.path\\), *\"\\.\"\\))'
-          replacement = '''
-              # Patched to handle paths with slashes
-              path_parts = ctx.attr.path.split('/')
-              p = ctx.path(ctx.attr._root).dirname
-              for part in path_parts:
-                  p = p.get_child(part)
-              ctx.symlink(p, ".")
-          '''
-          new_content = re.sub(pattern, replacement, content, flags=re.DOTALL)
-          with open("third_party/repo.bzl", "w") as f:
-              f.write(new_content)
-          PY_EOF
-          python3 /tmp/patch_repo.py
+          # Fix android_configure.bzl: set NDK version to 23
+          sed -i 's/ndk_version =.*/    ndk_version = 23/' third_party/android/android_configure.bzl
+
+          # Fix vendored path issue in repo.bzl
+          # Replace the problematic line with proper path splitting
+          sed -i '/ctx.symlink(ctx.path(ctx.attr._root).dirname.get_child(ctx.attr.path), ".")/c\
+              # Patched to handle paths with slashes\n    path_parts = ctx.attr.path.split('\''/'\'')\n    p = ctx.path(ctx.attr._root).dirname\n    for part in path_parts:\n        p = p.get_child(part)\n    ctx.symlink(p, ".")' third_party/repo.bzl
+
           cd ..
 
-          # Patch tflite-support BUILD
+          # Patch tflite-support BUILD file
           sed -i 's|//third_party/bazel_rules/rules_java/java:defs.bzl|@rules_java//java:defs.bzl|' tensorflow_lite_support/java/BUILD
+
+          # Patch tflite-support's third_party/repo.bzl (to_list error)
           sed -i 's/\.to_list()//g' third_party/repo.bzl
 
           # Create platform definitions
