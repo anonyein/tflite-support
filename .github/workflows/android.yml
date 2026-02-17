@@ -1,4 +1,4 @@
-name: Build tflite-support Android AAR (官方指南)
+name: Build tflite-support Android AAR (官方指南，无权限问题)
 
 on:
   push:
@@ -41,8 +41,12 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      # 安装 Bazelisk（作为 bazel 命令）以避免 npm 权限问题
       - name: Install Bazelisk
-        run: npm install -g @bazel/bazelisk
+        run: |
+          wget -q https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-linux-amd64 -O bazelisk
+          chmod +x bazelisk
+          sudo mv bazelisk /usr/local/bin/bazel
 
       - name: Set up Android SDK and NDK
         run: |
