@@ -26,7 +26,7 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      # 创建 Dockerfile 用于构建包含 Android SDK 和 Java 8 的镜像
+      # 创建 Dockerfile 用于构建包含 Android SDK 和 NDK 的镜像
       - name: Create Dockerfile
         run: |
           cat > Dockerfile.android <<'EOF'
@@ -57,8 +57,13 @@ jobs:
           ENV ANDROID_NDK_HOME /opt/android-ndk-${ANDROID_NDK_VERSION}
           ENV PATH ${PATH}:${ANDROID_NDK_HOME}
 
-          # Set environment variables for Bazel
+          # Create source.properties file for NDK (to satisfy TensorFlow's android_configure rule)
+          RUN echo "Pkg.Revision = 25.1.8937393" > ${ANDROID_NDK_HOME}/source.properties && \
+              echo "Pkg.Desc = Android NDK" >> ${ANDROID_NDK_HOME}/source.properties
+
+          # Set Android API level (as integer) and build tools version
           ENV ANDROID_API_LEVEL 21
+          ENV ANDROID_NDK_API_LEVEL 25
           ENV ANDROID_BUILD_TOOLS_VERSION 30.0.3
           EOF
 
@@ -130,7 +135,7 @@ jobs:
               # 计算 Python 库路径
               PYTHON_LIB_PATH=\$(python3 -c 'import site; print(site.getsitepackages()[0])')
 
-              # 执行 Bazel 构建（注意：Bazel 5.1.1 不支持 --noenable_bzlmod，所以移除该标志）
+              # 执行 Bazel 构建
               bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
                 --android_platforms=//platform:android_arm64_v8a,//platform:android_armeabi_v7a,//platform:android_x86,//platform:android_x86_64 \
                 --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
