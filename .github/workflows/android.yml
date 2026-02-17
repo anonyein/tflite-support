@@ -1,4 +1,4 @@
-name: Build TFLite Support Android AAR (Final Fix)
+name: Build TFLite Support Android AAR (Final with fetch)
 
 on:
   push:
@@ -107,7 +107,6 @@ jobs:
           find . -type f -exec sed -i '/python_init_/d' {} \;
 
           # 设置 NDK 版本为 27（稳健替换）
-          # 注释掉原有的 ndk_version 行，并添加固定值
           sed -i '/ndk_version =/c\    # ndk_version = 0  # commented out\n    ndk_version = 27' third_party/android/android_configure.bzl
 
           # 修复 repo.bzl 中的路径问题
@@ -154,7 +153,16 @@ jobs:
           )
           EOF
 
-      # 构建 AAR（Bazel 7 默认不使用 Bzlmod，无需显式禁用）
+      # 先尝试拉取所有依赖，确保外部仓库（如 googletest）被下载
+      - name: Fetch external dependencies
+        run: |
+          bazel fetch //tensorflow_lite_support/java:tensorflow-lite-support \
+            --android_platforms=//platform:android_arm64_v8a,//platform:android_armeabi_v7a,//platform:android_x86,//platform:android_x86_64 \
+            --override_repository=org_tensorflow=$(pwd)/tensorflow_src \
+            --curses=no \
+            --verbose_failures
+
+      # 正式构建
       - name: Build TFLite Support AAR
         run: |
           bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
