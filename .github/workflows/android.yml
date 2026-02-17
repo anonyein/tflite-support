@@ -40,7 +40,6 @@ jobs:
               # 安装 Java 17（主环境）和 Java 8（用于 sdkmanager）
               apt-get update && apt-get install -y openjdk-17-jdk openjdk-8-jre-headless wget unzip
 
-              # 设置默认 Java 为 17（供 Bazel 使用）
               export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
               export PATH=\$JAVA_HOME/bin:\$PATH
 
@@ -54,7 +53,6 @@ jobs:
               export ANDROID_SDK_HOME=\$ANDROID_HOME
               export PATH=\$ANDROID_HOME/tools:\$ANDROID_HOME/tools/bin:\$ANDROID_HOME/platform-tools:\$PATH
 
-              # 使用 Java 8 运行 sdkmanager
               export JAVA8_HOME=/usr/lib/jvm/java-8-openjdk-amd64
               (
                 export JAVA_HOME=\$JAVA8_HOME
@@ -63,7 +61,6 @@ jobs:
                 sdkmanager \"platforms;android-21\" \"build-tools;30.0.3\"
               )
 
-              # 安装 NDK r27 并重命名为纯数字目录
               cd /opt
               wget -q https://dl.google.com/android/repository/android-ndk-r27-linux.zip
               unzip -q android-ndk-r27-linux.zip
@@ -80,35 +77,28 @@ jobs:
 
               cd /workspace
 
-              # 克隆 TensorFlow（与 WORKSPACE 中一致）
               git clone --recursive https://github.com/tensorflow/tensorflow.git tensorflow_src
               cd tensorflow_src
               git checkout 777924f5575e7e6e22e4f47be211c2a94f59c4f5
               git submodule update --init --recursive
 
-              # 创建 unused 文件（修复 vendoring）
               touch unused
               if [ -d xla ]; then touch xla/unused; fi
 
-              # 彻底删除所有对 python_version_repo 的引用
               find . -type f -name '*.bzl' -exec sed -i '/python_version_repo/d' {} \;
-              # 删除 load generate_api.bzl 的行
               find . -type f -name '*.bzl' -exec sed -i '/load.*generate_api.bzl/d' {} \;
-              # 替换 HERMETIC_PYTHON_VERSION 为硬编码字符串
               find . -type f -name '*.bzl' -exec sed -i 's/HERMETIC_PYTHON_VERSION/\"3.12\"/g' {} \;
 
-              # 特别修补 python_configure.bzl（如果存在）
               if [ -f xla/third_party/py/python_configure.bzl ]; then
                 sed -i '/@python_version_repo/d' xla/third_party/py/python_configure.bzl
               fi
 
-              # 使用 Python 精确修补 third_party/repo.bzl 中的 vendoring 路径问题
-              python3 <<'PY_EOF'
+              # 将 Python 修补脚本写入临时文件并执行
+              cat > /tmp/patch_repo.py <<'INNER_EOF'
               import re
               with open('third_party/repo.bzl', 'r') as f:
                   content = f.read()
-              # 匹配 _tf_vendored_impl 中的 ctx.symlink 行
-              pattern = r'(ctx\.symlink\(ctx\.path\(ctx\.attr\._root\)\.dirname\.get_child\(ctx\.attr\.path\), *"\.",?\))'
+              pattern = r'(ctx\.symlink\(ctx\.path\(ctx\.attr\._root\)\.dirname\.get_child\(ctx\.attr\.path\), *\"\.\",?\))'
               replacement = '''
                   # Patched to handle paths with slashes
                   path_parts = ctx.attr.path.split('/')
@@ -120,16 +110,16 @@ jobs:
               new_content = re.sub(pattern, replacement, content, flags=re.DOTALL)
               with open('third_party/repo.bzl', 'w') as f:
                   f.write(new_content)
-              print("Patched third_party/repo.bzl successfully")
-              PY_EOF
+              print('Patched third_party/repo.bzl')
+              INNER_EOF
+
+              python3 /tmp/patch_repo.py
 
               cd ..
 
-              # 修补 tflite-support 自己的文件
               sed -i 's|//third_party/bazel_rules/rules_java/java:defs.bzl|@rules_java//java:defs.bzl|' tensorflow_lite_support/java/BUILD
               sed -i 's/\.to_list()//g' third_party/repo.bzl
 
-              # 执行 Bazel 构建
               bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
                 -c opt \
                 --fat_apk_cpu=arm64-v8a,armeabi-v7a,x86,x86_64 \
