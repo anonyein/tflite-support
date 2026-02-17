@@ -1,4 +1,4 @@
-name: Build TFLite Support AAR (Final Working)
+name: Build TFLite Support AAR (Final with Python Config)
 
 on:
   push:
@@ -76,11 +76,19 @@ jobs:
           git submodule update --init --recursive
           touch unused
 
+          # Run configure.py to set up Hermetic Python
+          export TF_NEED_ANDROID=1
+          export TF_SET_ANDROID_WORKSPACE=1
+          export HERMETIC_PYTHON_VERSION=3.12
+          export PYTHON_BIN_PATH=/usr/bin/python3
+          export PYTHON_LIB_PATH=$(python3 -c 'import site; print(site.getsitepackages()[0])')
+          export TF_PYTHON_VERSION=3.12
+          yes '' | python3 configure.py
+
           # Fix android_configure.bzl: set NDK version to 23
           sed -i 's/ndk_version =.*/    ndk_version = 23/' third_party/android/android_configure.bzl
 
           # Fix vendored path issue in repo.bzl
-          # Replace the problematic line with proper path splitting
           sed -i '/ctx.symlink(ctx.path(ctx.attr._root).dirname.get_child(ctx.attr.path), ".")/c\
               # Patched to handle paths with slashes\n    path_parts = ctx.attr.path.split('\''/'\'')\n    p = ctx.path(ctx.attr._root).dirname\n    for part in path_parts:\n        p = p.get_child(part)\n    ctx.symlink(p, ".")' third_party/repo.bzl
 
