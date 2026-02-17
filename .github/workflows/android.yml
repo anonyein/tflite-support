@@ -1,4 +1,4 @@
-name: Build TFLite Support AAR (Final Attempt)
+name: Build TFLite Support AAR (Fixed Indent)
 
 on:
   push:
@@ -26,142 +26,140 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      # 使用官方 TensorFlow devel 镜像（包含所有构建工具）
-      - name: Run build in official devel container
+      - name: Create build script
+        run: |
+          cat > build.sh <<'EOF'
+          #!/bin/bash
+          set -ex
+
+          # Install extra dependencies
+          apt-get update && apt-get install -y openjdk-8-jdk wget unzip
+
+          export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+          export PATH=$JAVA_HOME/bin:$PATH
+
+          # Install Android SDK
+          mkdir -p /opt/android/sdk
+          cd /opt/android/sdk
+          wget -q https://dl.google.com/android/repository/sdk-tools-linux-4333796.zip
+          unzip -q sdk-tools-linux-4333796.zip
+          rm sdk-tools-linux-4333796.zip
+          export ANDROID_HOME=/opt/android/sdk
+          export PATH=$ANDROID_HOME/tools:$ANDROID_HOME/tools/bin:$ANDROID_HOME/platform-tools:$PATH
+
+          yes | sdkmanager --licenses || true
+          sdkmanager "platforms;android-21" "build-tools;30.0.3"
+
+          # Install NDK
+          cd /opt
+          wget -q https://dl.google.com/android/repository/android-ndk-r23c-linux.zip
+          unzip -q android-ndk-r23c-linux.zip
+          mv android-ndk-r23c android-ndk-23
+          rm android-ndk-r23c-linux.zip
+          export ANDROID_NDK_HOME=/opt/android-ndk-23
+          export PATH=$ANDROID_NDK_HOME:$PATH
+
+          echo "Pkg.Revision = 23.2.8568313" > $ANDROID_NDK_HOME/source.properties
+          echo "Pkg.Desc = Android NDK" >> $ANDROID_NDK_HOME/source.properties
+
+          export ANDROID_API_LEVEL=21
+          export ANDROID_NDK_API_LEVEL=23
+          export ANDROID_BUILD_TOOLS_VERSION=30.0.3
+          export ANDROID_SDK_API_LEVEL=21
+
+          cd /workspace
+
+          # Clone TensorFlow
+          git clone --recursive https://github.com/tensorflow/tensorflow.git tensorflow_src
+          cd tensorflow_src
+          git checkout 777924f5575e7e6e22e4f47be211c2a94f59c4f5
+          git submodule update --init --recursive
+          touch unused
+          sed -i '71s/.*/    ndk_version = 23/' third_party/android/android_configure.bzl
+
+          # Patch repo.bzl
+          cat > /tmp/patch_repo.py <<'PY_EOF'
+          import re
+          with open("third_party/repo.bzl", "r") as f:
+              content = f.read()
+          pattern = r'(ctx\\.symlink\\(ctx\\.path\\(ctx\\.attr\\._root\\)\\.dirname\\.get_child\\(ctx\\.attr\\.path\\), *\"\\.\"\\))'
+          replacement = '''
+              # Patched to handle paths with slashes
+              path_parts = ctx.attr.path.split('/')
+              p = ctx.path(ctx.attr._root).dirname
+              for part in path_parts:
+                  p = p.get_child(part)
+              ctx.symlink(p, ".")
+          '''
+          new_content = re.sub(pattern, replacement, content, flags=re.DOTALL)
+          with open("third_party/repo.bzl", "w") as f:
+              f.write(new_content)
+          PY_EOF
+          python3 /tmp/patch_repo.py
+          cd ..
+
+          # Patch tflite-support BUILD
+          sed -i 's|//third_party/bazel_rules/rules_java/java:defs.bzl|@rules_java//java:defs.bzl|' tensorflow_lite_support/java/BUILD
+          sed -i 's/\.to_list()//g' third_party/repo.bzl
+
+          # Create platform definitions
+          mkdir -p platform
+          cat > platform/BUILD <<'PLATFORM_EOF'
+          platform(
+              name = "android_arm64_v8a",
+              constraint_values = [
+                  "@platforms//os:android",
+                  "@platforms//cpu:arm64",
+              ],
+          )
+          platform(
+              name = "android_armeabi_v7a",
+              constraint_values = [
+                  "@platforms//os:android",
+                  "@platforms//cpu:armv7",
+              ],
+          )
+          platform(
+              name = "android_x86",
+              constraint_values = [
+                  "@platforms//os:android",
+                  "@platforms//cpu:x86_32",
+              ],
+          )
+          platform(
+              name = "android_x86_64",
+              constraint_values = [
+                  "@platforms//os:android",
+                  "@platforms//cpu:x86_64",
+              ],
+          )
+          PLATFORM_EOF
+
+          # Python lib path
+          PYTHON_LIB_PATH=$(python3 -c 'import site; print(site.getsitepackages()[0])')
+
+          # Build
+          bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
+            --android_platforms=//platform:android_arm64_v8a,//platform:android_armeabi_v7a,//platform:android_x86,//platform:android_x86_64 \
+            --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
+            --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
+            --repo_env=PYTHON_LIB_PATH=$PYTHON_LIB_PATH \
+            --repo_env=TF_PYTHON_VERSION=3.12 \
+            --override_repository=org_tensorflow=/workspace/tensorflow_src \
+            --curses=no \
+            --show_timestamps \
+            --verbose_failures
+          EOF
+          chmod +x build.sh
+
+      - name: Run build in Docker container
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
             -w /workspace \
             tensorflow/tensorflow:devel \
-            bash -c "
-              set -ex
+            ./build.sh
 
-              # 安装额外依赖（Java 8 用于 sdkmanager，wget 和 unzip）
-              apt-get update && apt-get install -y openjdk-8-jdk wget unzip
-
-              # 设置 Java 环境
-              export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
-              export PATH=\$JAVA_HOME/bin:\$PATH
-
-              # 下载并安装 Android SDK 工具（旧版，兼容 Java 8）
-              mkdir -p /opt/android/sdk
-              cd /opt/android/sdk
-              wget -q https://dl.google.com/android/repository/sdk-tools-linux-4333796.zip
-              unzip -q sdk-tools-linux-4333796.zip
-              rm sdk-tools-linux-4333796.zip
-              export ANDROID_HOME=/opt/android/sdk
-              export PATH=\$ANDROID_HOME/tools:\$ANDROID_HOME/tools/bin:\$ANDROID_HOME/platform-tools:\$PATH
-
-              # 接受许可证并安装 platform 和 build-tools
-              yes | sdkmanager --licenses || true
-              sdkmanager \"platforms;android-21\" \"build-tools;30.0.3\"
-
-              # 下载并安装 NDK r23c（重命名为纯数字目录）
-              cd /opt
-              wget -q https://dl.google.com/android/repository/android-ndk-r23c-linux.zip
-              unzip -q android-ndk-r23c-linux.zip
-              mv android-ndk-r23c android-ndk-23
-              rm android-ndk-r23c-linux.zip
-              export ANDROID_NDK_HOME=/opt/android-ndk-23
-              export PATH=\$ANDROID_NDK_HOME:\$PATH
-
-              # 创建 NDK 的 source.properties（确保数字版本）
-              echo \"Pkg.Revision = 23.2.8568313\" > \$ANDROID_NDK_HOME/source.properties
-              echo \"Pkg.Desc = Android NDK\" >> \$ANDROID_NDK_HOME/source.properties
-
-              # 设置 Android 环境变量（供 bazel 使用）
-              export ANDROID_API_LEVEL=21
-              export ANDROID_NDK_API_LEVEL=23
-              export ANDROID_BUILD_TOOLS_VERSION=30.0.3
-              export ANDROID_SDK_API_LEVEL=21
-
-              # 返回工作区
-              cd /workspace
-
-              # 克隆 TensorFlow（包含子模块）并修补
-              git clone --recursive https://github.com/tensorflow/tensorflow.git tensorflow_src
-              cd tensorflow_src
-              git checkout 777924f5575e7e6e22e4f47be211c2a94f59c4f5
-              git submodule update --init --recursive
-              # 创建 unused 文件（解决 vendoring 错误）
-              touch unused
-              # 修补 android_configure.bzl（强制 NDK 版本为 23）
-              sed -i '71s/.*/    ndk_version = 23/' third_party/android/android_configure.bzl
-              # 修补 repo.bzl 中的 vendored 路径问题
-              python3 <<'PY_EOF'
-              import re
-              with open(\"third_party/repo.bzl\", \"r\") as f:
-                  content = f.read()
-              pattern = r'(ctx\\.symlink\\(ctx\\.path\\(ctx\\.attr\\._root\\)\\.dirname\\.get_child\\(ctx\\.attr\\.path\\), *\"\\.\"\\))'
-              replacement = '''
-                  # Patched to handle paths with slashes
-                  path_parts = ctx.attr.path.split('/')
-                  p = ctx.path(ctx.attr._root).dirname
-                  for part in path_parts:
-                      p = p.get_child(part)
-                  ctx.symlink(p, ".")
-              '''
-              new_content = re.sub(pattern, replacement, content, flags=re.DOTALL)
-              with open(\"third_party/repo.bzl\", \"w\") as f:
-                  f.write(new_content)
-              PY_EOF
-              cd ..
-
-              # 修补 tflite-support 的 BUILD 文件
-              sed -i 's|//third_party/bazel_rules/rules_java/java:defs.bzl|@rules_java//java:defs.bzl|' tensorflow_lite_support/java/BUILD
-
-              # 修补 third_party/repo.bzl（tflite-support 自己的）
-              sed -i 's/\.to_list()//g' third_party/repo.bzl
-
-              # 创建 Android 平台定义（使用 printf 避免 heredoc 问题）
-              mkdir -p platform
-              printf '%s\n' \\
-                'platform(' \\
-                '    name = \"android_arm64_v8a\",' \\
-                '    constraint_values = [' \\
-                '        \"@platforms//os:android\",' \\
-                '        \"@platforms//cpu:arm64\",' \\
-                '    ],' \\
-                ')' \\
-                'platform(' \\
-                '    name = \"android_armeabi_v7a\",' \\
-                '    constraint_values = [' \\
-                '        \"@platforms//os:android\",' \\
-                '        \"@platforms//cpu:armv7\",' \\
-                '    ],' \\
-                ')' \\
-                'platform(' \\
-                '    name = \"android_x86\",' \\
-                '    constraint_values = [' \\
-                '        \"@platforms//os:android\",' \\
-                '        \"@platforms//cpu:x86_32\",' \\
-                '    ],' \\
-                ')' \\
-                'platform(' \\
-                '    name = \"android_x86_64\",' \\
-                '    constraint_values = [' \\
-                '        \"@platforms//os:android\",' \\
-                '        \"@platforms//cpu:x86_64\",' \\
-                '    ],' \\
-                ')' > platform/BUILD
-
-              # 计算 Python 库路径
-              PYTHON_LIB_PATH=\$(python3 -c 'import site; print(site.getsitepackages()[0])')
-
-              # 执行构建（Bazel 5.x 默认不使用 Bzlmod，无需 --noenable_bzlmod）
-              bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
-                --android_platforms=//platform:android_arm64_v8a,//platform:android_armeabi_v7a,//platform:android_x86,//platform:android_x86_64 \
-                --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
-                --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
-                --repo_env=PYTHON_LIB_PATH=\$PYTHON_LIB_PATH \
-                --repo_env=TF_PYTHON_VERSION=3.12 \
-                --override_repository=org_tensorflow=/workspace/tensorflow_src \
-                --curses=no \
-                --show_timestamps \
-                --verbose_failures
-            "
-
-      # 定位生成的 AAR 文件
       - name: Locate AAR file
         id: locate-aar
         run: |
