@@ -83,20 +83,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # 克隆 TensorFlow 源码（需要修补 android_configure.bzl）
+      # 克隆 TensorFlow 源码（需要修补 android_configure.bzl 和创建 unused 文件）
       - name: Clone TensorFlow source
         run: |
           git clone https://github.com/tensorflow/tensorflow.git tensorflow_src
           cd tensorflow_src
           git checkout 777924f5575e7e6e22e4f47be211c2a94f59c4f5
+          # 创建 unused 文件（解决 vendoring 错误）
+          touch unused
           cd ..
 
       # 修补 android_configure.bzl，强制使用数字 NDK 版本 23
       - name: Patch android_configure.bzl
         run: |
-          # 替换第71行，将版本解析强制设为 23
           sed -i '71s/.*/    ndk_version = 23/' tensorflow_src/third_party/android/android_configure.bzl
-          # 验证修改
           grep -n "ndk_version =" tensorflow_src/third_party/android/android_configure.bzl
 
       # 在容器内运行构建
@@ -111,6 +111,9 @@ jobs:
               # 接受 Android SDK 许可证
               yes | sdkmanager --licenses || true
               sdkmanager \"platforms;android-21\" \"build-tools;30.0.3\"
+
+              # 计算 Python 库路径
+              PYTHON_LIB_PATH=\$(python3 -c 'import site; print(site.getsitepackages()[0])')
 
               # 如果存在 configure.py 则运行
               if [ -f configure.py ]; then
@@ -151,10 +154,15 @@ jobs:
                 '    ],' \\
                 ')' > platform/BUILD
 
-              # 计算 Python 库路径
-              PYTHON_LIB_PATH=\$(python3 -c 'import site; print(site.getsitepackages()[0])')
+              # 同步外部依赖，确保覆盖生效
+              bazel sync --configure \
+                --override_repository=org_tensorflow=/tensorflow_src \
+                --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
+                --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
+                --repo_env=PYTHON_LIB_PATH=\$PYTHON_LIB_PATH \
+                --repo_env=TF_PYTHON_VERSION=3.12
 
-              # 执行 Bazel 构建，使用本地修补的 TensorFlow 源码覆盖
+              # 执行 Bazel 构建
               bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
                 --android_platforms=//platform:android_arm64_v8a,//platform:android_armeabi_v7a,//platform:android_x86,//platform:android_x86_64 \
                 --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
