@@ -81,9 +81,9 @@ jobs:
             -w /workspace \
             tflite-builder:latest \
             bash -c "
-              # 接受 Android SDK 许可证（非交互式）
-              yes | sdkmanager --licenses > /dev/null 2>&1 || true
-              sdkmanager \"platforms;android-21\" \"build-tools;30.0.3\" > /dev/null 2>&1
+              # 接受 Android SDK 许可证
+              yes | sdkmanager --licenses || true
+              sdkmanager \"platforms;android-21\" \"build-tools;30.0.3\"
 
               # 如果存在 configure.py 则运行
               if [ -f configure.py ]; then
@@ -94,36 +94,35 @@ jobs:
 
               # 创建 Android 平台定义
               mkdir -p platform
-              cat > platform/BUILD <<'PLATFORM_EOF'
-              platform(
-                  name = \"android_arm64_v8a\",
-                  constraint_values = [
-                      \"@platforms//os:android\",
-                      \"@platforms//cpu:arm64\",
-                  ],
-              )
-              platform(
-                  name = \"android_armeabi_v7a\",
-                  constraint_values = [
-                      \"@platforms//os:android\",
-                      \"@platforms//cpu:armv7\",
-                  ],
-              )
-              platform(
-                  name = \"android_x86\",
-                  constraint_values = [
-                      \"@platforms//os:android\",
-                      \"@platforms//cpu:x86_32\",
-                  ],
-              )
-              platform(
-                  name = \"android_x86_64\",
-                  constraint_values = [
-                      \"@platforms//os:android\",
-                      \"@platforms//cpu:x86_64\",
-                  ],
-              )
-              PLATFORM_EOF
+              printf '%s\n' \\
+                'platform(' \\
+                '    name = \"android_arm64_v8a\",' \\
+                '    constraint_values = [' \\
+                '        \"@platforms//os:android\",' \\
+                '        \"@platforms//cpu:arm64\",' \\
+                '    ],' \\
+                ')' \\
+                'platform(' \\
+                '    name = \"android_armeabi_v7a\",' \\
+                '    constraint_values = [' \\
+                '        \"@platforms//os:android\",' \\
+                '        \"@platforms//cpu:armv7\",' \\
+                '    ],' \\
+                ')' \\
+                'platform(' \\
+                '    name = \"android_x86\",' \\
+                '    constraint_values = [' \\
+                '        \"@platforms//os:android\",' \\
+                '        \"@platforms//cpu:x86_32\",' \\
+                '    ],' \\
+                ')' \\
+                'platform(' \\
+                '    name = \"android_x86_64\",' \\
+                '    constraint_values = [' \\
+                '        \"@platforms//os:android\",' \\
+                '        \"@platforms//cpu:x86_64\",' \\
+                '    ],' \\
+                ')' > platform/BUILD
 
               # 计算 Python 库路径
               PYTHON_LIB_PATH=\$(python3 -c 'import site; print(site.getsitepackages()[0])')
