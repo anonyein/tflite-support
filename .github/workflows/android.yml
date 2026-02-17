@@ -58,6 +58,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bazel-
 
+      # 修复 BUILD 文件中错误的 load 路径（官方仓库可能未及时更新）
+      - name: Patch BUILD file to use correct rules_java load path
+        run: |
+          sed -i 's|//third_party/bazel_rules/rules_java/java:defs.bzl|@rules_java//java:defs.bzl|' tensorflow_lite_support/java/BUILD
+          echo "Patched BUILD file:"
+          grep -n "rules_java" tensorflow_lite_support/java/BUILD || true
+
       - name: Build TFLite Support AAR
         run: |
           bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
