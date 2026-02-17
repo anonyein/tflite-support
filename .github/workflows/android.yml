@@ -1,4 +1,4 @@
-name: Build TFLite Support AAR (Final with Clang Disabled)
+name: Build TFLite Support AAR (Final with NDK r25c)
 
 on:
   push:
@@ -45,25 +45,26 @@ jobs:
           unzip -q sdk-tools-linux-4333796.zip
           rm sdk-tools-linux-4333796.zip
           export ANDROID_HOME=/opt/android/sdk
+          export ANDROID_SDK_HOME=$ANDROID_HOME  # for configure.py
           export PATH=$ANDROID_HOME/tools:$ANDROID_HOME/tools/bin:$ANDROID_HOME/platform-tools:$PATH
 
           yes | sdkmanager --licenses || true
           sdkmanager "platforms;android-21" "build-tools;30.0.3"
 
-          # Install NDK
+          # Install NDK r25c (supported by Bazel)
           cd /opt
-          wget -q https://dl.google.com/android/repository/android-ndk-r23c-linux.zip
-          unzip -q android-ndk-r23c-linux.zip
-          mv android-ndk-r23c android-ndk-23
-          rm android-ndk-r23c-linux.zip
-          export ANDROID_NDK_HOME=/opt/android-ndk-23
+          wget -q https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
+          unzip -q android-ndk-r25c-linux.zip
+          mv android-ndk-r25c android-ndk-25
+          rm android-ndk-r25c-linux.zip
+          export ANDROID_NDK_HOME=/opt/android-ndk-25
           export PATH=$ANDROID_NDK_HOME:$PATH
 
-          echo "Pkg.Revision = 23.2.8568313" > $ANDROID_NDK_HOME/source.properties
+          echo "Pkg.Revision = 25.2.9519653" > $ANDROID_NDK_HOME/source.properties
           echo "Pkg.Desc = Android NDK" >> $ANDROID_NDK_HOME/source.properties
 
           export ANDROID_API_LEVEL=21
-          export ANDROID_NDK_API_LEVEL=23
+          export ANDROID_NDK_API_LEVEL=25
           export ANDROID_BUILD_TOOLS_VERSION=30.0.3
           export ANDROID_SDK_API_LEVEL=21
 
@@ -83,15 +84,18 @@ jobs:
           export PYTHON_BIN_PATH=/usr/bin/python3
           export PYTHON_LIB_PATH=$(python3 -c 'import site; print(site.getsitepackages()[0])')
           export TF_PYTHON_VERSION=3.12
-          export TF_NEED_CLANG=0  # Disable clang requirement
+          export TF_NEED_CLANG=0
           export TF_NEED_CUDA=0
           export TF_NEED_ROCM=0
           export TF_NEED_TENSORRT=0
           export TF_DOWNLOAD_CLANG=0
+          # Ensure configure.py finds Android SDK
+          export ANDROID_SDK_HOME=/opt/android/sdk
+          export ANDROID_NDK_HOME=/opt/android-ndk-25
           yes '' | python3 configure.py
 
-          # Fix android_configure.bzl: set NDK version to 23
-          sed -i 's/ndk_version =.*/    ndk_version = 23/' third_party/android/android_configure.bzl
+          # Fix android_configure.bzl: set NDK version to 25
+          sed -i 's/ndk_version =.*/    ndk_version = 25/' third_party/android/android_configure.bzl
 
           # Fix vendored path issue in repo.bzl
           sed -i '/ctx.symlink(ctx.path(ctx.attr._root).dirname.get_child(ctx.attr.path), ".")/c\
@@ -137,9 +141,6 @@ jobs:
               ],
           )
           PLATFORM_EOF
-
-          # Python lib path (reuse existing variable)
-          PYTHON_LIB_PATH=$(python3 -c 'import site; print(site.getsitepackages()[0])')
 
           # Build
           bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
