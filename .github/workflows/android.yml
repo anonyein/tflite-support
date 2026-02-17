@@ -26,17 +26,20 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      # 创建 Dockerfile 用于构建包含 Android SDK 的镜像
+      # 创建 Dockerfile 用于构建包含 Android SDK 和 Java 8 的镜像
       - name: Create Dockerfile
         run: |
           cat > Dockerfile.android <<'EOF'
           FROM tensorflow/tensorflow:devel
 
-          # Install required packages
-          RUN apt-get update && apt-get install -y openjdk-17-jdk wget unzip && \
+          # Install required packages, including OpenJDK 8 (for sdkmanager compatibility)
+          RUN apt-get update && apt-get install -y openjdk-8-jdk wget unzip && \
               apt-get clean && rm -rf /var/lib/apt/lists/*
 
-          # Install Android SDK
+          # Set JAVA_HOME to Java 8
+          ENV JAVA_HOME /usr/lib/jvm/java-8-openjdk-amd64
+
+          # Install Android SDK tools (older version that works with Java 8)
           ENV ANDROID_SDK_VERSION 4333796
           ENV ANDROID_HOME /opt/android/sdk
           RUN mkdir -p ${ANDROID_HOME} && \
@@ -92,7 +95,7 @@ jobs:
                 yes '' | python3 configure.py
               fi
 
-              # 创建 Android 平台定义
+              # 创建 Android 平台定义（使用 printf 避免 heredoc 问题）
               mkdir -p platform
               printf '%s\n' \\
                 'platform(' \\
@@ -127,7 +130,7 @@ jobs:
               # 计算 Python 库路径
               PYTHON_LIB_PATH=\$(python3 -c 'import site; print(site.getsitepackages()[0])')
 
-              # 执行 Bazel 构建
+              # 执行 Bazel 构建（注意：Bazel 5.1.1 不支持 --noenable_bzlmod，所以移除该标志）
               bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
                 --android_platforms=//platform:android_arm64_v8a,//platform:android_armeabi_v7a,//platform:android_x86,//platform:android_x86_64 \
                 --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
@@ -136,8 +139,7 @@ jobs:
                 --repo_env=TF_PYTHON_VERSION=3.12 \
                 --curses=no \
                 --show_timestamps \
-                --verbose_failures \
-                --noenable_bzlmod
+                --verbose_failures
             "
 
       # 定位生成的 AAR 文件
