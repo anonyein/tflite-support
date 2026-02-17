@@ -65,16 +65,31 @@ jobs:
           echo "Patched BUILD file:"
           grep -n "rules_java" tensorflow_lite_support/java/BUILD || true
 
-      # 构建命令：传递所有必要的 Python 环境变量，并采用 Android 配置
+      # 计算 Python 库路径（用于后续环境变量）
+      - name: Compute Python library path
+        id: python
+        run: |
+          echo "lib_path=$(python3 -c 'import site; print(site.getsitepackages()[0])')" >> "$GITHUB_OUTPUT"
+
+      # 使用 --repo_env 提前拉取所有依赖，确保 Hermetic Python 仓库被正确创建
+      - name: Fetch external dependencies with Python env
+        run: |
+          bazel fetch //tensorflow_lite_support/java:tensorflow-lite-support \
+            --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
+            --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
+            --repo_env=PYTHON_LIB_PATH=${{ steps.python.outputs.lib_path }} \
+            --repo_env=TF_PYTHON_VERSION=3.12 \
+            --curses=no
+
+      # 正式构建，同样传递 repo_env 并启用 Android 配置
       - name: Build TFLite Support AAR
         run: |
-          # 计算 Python 库路径
-          PYTHON_LIB_PATH=$(python3 -c "import site; print(site.getsitepackages()[0])")
           bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
-            --action_env=HERMETIC_PYTHON_VERSION=3.12 \
-            --action_env=PYTHON_BIN_PATH=/usr/bin/python3 \
-            --action_env=PYTHON_LIB_PATH=$PYTHON_LIB_PATH \
-            --action_env=TF_PYTHON_VERSION=3.12 \
+            --config=android_arm64 \
+            --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
+            --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
+            --repo_env=PYTHON_LIB_PATH=${{ steps.python.outputs.lib_path }} \
+            --repo_env=TF_PYTHON_VERSION=3.12 \
             --curses=no \
             --show_timestamps \
             --verbose_failures
