@@ -79,13 +79,19 @@ jobs:
           sed -i 's|//third_party/bazel_rules/rules_java/java:java_library.bzl|@rules_java//java:defs.bzl|' flatbuffers_src/build_defs.bzl || true
           echo "Flatbuffers patched"
 
-      - name: Clone TensorFlow source
+      - name: Clone TensorFlow source with submodules
         run: |
           TF_COMMIT="777924f5575e7e6e22e4f47be211c2a94f59c4f5"
-          git clone https://github.com/tensorflow/tensorflow.git tensorflow_src
+          git clone --recursive https://github.com/tensorflow/tensorflow.git tensorflow_src
           cd tensorflow_src
           git checkout $TF_COMMIT
+          git submodule update --init --recursive
           cd ..
+
+      # 创建 unused 文件，解决 vendoring 规则错误
+      - name: Create unused file in tensorflow_src
+        run: |
+          touch tensorflow_src/unused
 
       - name: Patch TensorFlow BUILD files
         run: |
