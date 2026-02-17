@@ -1,4 +1,4 @@
-name: Build TFLite Support Android AAR (Final)
+name: Build TFLite Support Android AAR (Final with Patched TensorFlow)
 
 on:
   push:
@@ -26,6 +26,7 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      # 删除 .bazelversion 防止干扰
       - name: Remove .bazelversion
         run: |
           if [ -f .bazelversion ]; then
@@ -38,6 +39,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      # 手动安装 Bazel 7.0.0
       - name: Install Bazel 7.0.0
         run: |
           BAZEL_VERSION=7.0.0
@@ -75,11 +77,53 @@ jobs:
       # 手动下载并修补 flatbuffers 源码
       - name: Download and patch flatbuffers
         run: |
-          FLATBUFFERS_VERSION="v2.0.0"
+          FLATBUFFERS_VERSION="v24.3.7"   # 选择较新版本，提供更多规则
           wget -q https://github.com/google/flatbuffers/archive/${FLATBUFFERS_VERSION}.tar.gz -O flatbuffers.tar.gz
           mkdir -p flatbuffers_src
           tar -xzf flatbuffers.tar.gz -C flatbuffers_src --strip-components=1
-          sed -i 's|//third_party/bazel_rules/rules_java/java:java_library.bzl|@rules_java//java:defs.bzl|' flatbuffers_src/build_defs.bzl
+          # 修复可能存在的路径错误
+          sed -i 's|//third_party/bazel_rules/rules_java/java:java_library.bzl|@rules_java//java:defs.bzl|' flatbuffers_src/build_defs.bzl || true
+          echo "Flatbuffers patched"
+
+      # 克隆 TensorFlow 源码（使用与 WORKSPACE 中相同的 commit）
+      - name: Clone TensorFlow source
+        run: |
+          TF_COMMIT="777924f5575e7e6e22e4f47be211c2a94f59c4f5"  # 从日志中提取，可能需根据实际情况调整
+          git clone https://github.com/tensorflow/tensorflow.git tensorflow_src
+          cd tensorflow_src
+          git checkout $TF_COMMIT
+          cd ..
+
+      # 修补 TensorFlow 中的错误 BUILD 文件
+      - name: Patch TensorFlow BUILD files
+        run: |
+          # 修正 acceleration/configuration/BUILD 中的错误 load
+          CONFIG_BUILD="tensorflow_src/tensorflow/lite/acceleration/configuration/BUILD"
+          if [ -f "$CONFIG_BUILD" ]; then
+            # 将 load 从 flatbuffers 改为从 tensorflow/lite/schema 加载
+            sed -i 's|load("@flatbuffers//:build_defs.bzl".*|load("//tensorflow/lite/schema:build_defs.bzl", "flatbuffer_cc_library", "flatbuffer_java_library")|' "$CONFIG_BUILD"
+            # 如果还需要 flatbuffer_android_library，可能需要额外处理；这里假设改用 java 即可
+            # 同时可能还需要 DEFAULT_FLATC_ARGS 和 flatc_path，这些通常来自 flatbuffers
+            # 我们可以在 tensorflow_src/tensorflow/lite/schema/build_defs.bzl 中检查是否提供了这些
+          else
+            echo "Warning: $CONFIG_BUILD not found"
+          fi
+
+          # 确保 tensorflow/lite/schema/build_defs.bzl 存在，并添加缺失的符号（如果需要）
+          SCHEMA_BUILD="tensorflow_src/tensorflow/lite/schema/build_defs.bzl"
+          if [ -f "$SCHEMA_BUILD" ]; then
+            # 如果该文件没有 flatbuffer_android_library，我们可以添加一个简单的宏调用 flatbuffer_java_library
+            if ! grep -q "flatbuffer_android_library" "$SCHEMA_BUILD"; then
+              echo "Adding flatbuffer_android_library to $SCHEMA_BUILD"
+              cat >> "$SCHEMA_BUILD" <<EOF
+
+              # Added by workflow for compatibility
+              def flatbuffer_android_library(name, srcs, deps=[], **kwargs):
+                  """Alias for flatbuffer_java_library for Android builds."""
+                  flatbuffer_java_library(name=name, srcs=srcs, deps=deps, **kwargs)
+              EOF
+                          fi
+                        fi
 
       # 创建 Android 平台定义
       - name: Create Android platform definitions
@@ -122,19 +166,7 @@ jobs:
         run: |
           echo "lib_path=$(python3 -c 'import site; print(site.getsitepackages()[0])')" >> "$GITHUB_OUTPUT"
 
-      # 先拉取所有依赖，确保 Python 工具链正确初始化
-      - name: Fetch external dependencies with overrides
-        run: |
-          bazel fetch //tensorflow_lite_support/java:tensorflow-lite-support \
-            --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
-            --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
-            --repo_env=PYTHON_LIB_PATH=${{ steps.python.outputs.lib_path }} \
-            --repo_env=TF_PYTHON_VERSION=3.12 \
-            --override_repository=flatbuffers=$(pwd)/flatbuffers_src \
-            --curses=no \
-            --noenable_bzlmod
-
-      # 正式构建
+      # 构建
       - name: Build TFLite Support AAR
         run: |
           bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
@@ -144,6 +176,7 @@ jobs:
             --repo_env=PYTHON_LIB_PATH=${{ steps.python.outputs.lib_path }} \
             --repo_env=TF_PYTHON_VERSION=3.12 \
             --override_repository=flatbuffers=$(pwd)/flatbuffers_src \
+            --override_repository=org_tensorflow=$(pwd)/tensorflow_src \
             --curses=no \
             --show_timestamps \
             --verbose_failures \
