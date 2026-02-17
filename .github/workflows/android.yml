@@ -26,12 +26,11 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      # 如果项目存在 .bazelversion，删除它以强制使用我们指定的 Bazel 版本
-      - name: Remove .bazelversion to enforce Bazel 7
+      # 删除 .bazelversion 以强制使用 Bazel 7（由 setup-bazel 指定）
+      - name: Remove .bazelversion
         run: |
           if [ -f .bazelversion ]; then
             rm -v .bazelversion
-            echo "Removed .bazelversion"
           fi
 
       - name: Setup Java 17
@@ -85,20 +84,22 @@ jobs:
         run: |
           echo "lib_path=$(python3 -c 'import site; print(site.getsitepackages()[0])')" >> "$GITHUB_OUTPUT"
 
-      # 使用 --repo_env 提前拉取所有依赖（不添加 Android 构建参数，因为 fetch 阶段不需要工具链）
-      - name: Fetch external dependencies with Python env
+      # 使用 --noenable_bzlmod 禁用 Bzlmod，强制 WORKSPACE 模式，拉取所有依赖
+      - name: Fetch external dependencies
         run: |
           bazel fetch //tensorflow_lite_support/java:tensorflow-lite-support \
+            --noenable_bzlmod \
             --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
             --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
             --repo_env=PYTHON_LIB_PATH=${{ steps.python.outputs.lib_path }} \
             --repo_env=TF_PYTHON_VERSION=3.12 \
             --curses=no
 
-      # 正式构建，显式传递 Android 构建参数，确保生成多架构 native 库
+      # 正式构建，同样禁用 Bzlmod，并传递多架构构建参数
       - name: Build TFLite Support AAR
         run: |
           bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
+            --noenable_bzlmod \
             --crosstool_top=//external:android/crosstool \
             --host_crosstool_top=@bazel_tools//tools/cpp:toolchain \
             --fat_apk_cpu=arm64-v8a,armeabi-v7a,x86,x86_64 \
