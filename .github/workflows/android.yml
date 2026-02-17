@@ -1,4 +1,4 @@
-name: Build TFLite Support Android AAR (LiteRT方案)
+name: Build TFLite Support AAR (模仿LiteRT脚本，使用Bazel 5.1.1)
 
 on:
   push:
@@ -22,8 +22,6 @@ jobs:
       RELEASE_VERSION: "0.0.0-nightly-SNAPSHOT"
       ANDROID_API_LEVEL: "21"
       NDK_VERSION: "r27"
-      # 沿用LiteRT的兼容标志：禁用新平台解析，允许重复符号，定义Android宏
-      BAZEL_CONFIG_FLAGS: "--incompatible_enable_android_toolchain_resolution=false --linkopt=-Wl,--undefined-version --linkopt=-Wl,--allow-multiple-definition --copt=-D__ANDROID__ --copt=-UINTEL_MKL"
 
     steps:
       - name: Checkout repository
@@ -32,9 +30,9 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Setup Bazel 7.0.0
+      - name: Setup Bazel 5.1.1
         run: |
-          wget -q https://github.com/bazelbuild/bazel/releases/download/7.0.0/bazel-7.0.0-linux-x86_64 -O bazel
+          wget -q https://github.com/bazelbuild/bazel/releases/download/5.1.1/bazel-5.1.1-linux-x86_64 -O bazel
           chmod +x bazel
           sudo mv bazel /usr/local/bin/bazel
           bazel --version
@@ -66,7 +64,6 @@ jobs:
 
       - name: Configure .bazelrc for NDK
         run: |
-          echo "build --repo_env=ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> .bazelrc
           echo "build --action_env=ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> .bazelrc
 
       - name: Verify Android paths
@@ -77,19 +74,16 @@ jobs:
           ls -la $ANDROID_HOME/platforms || true
           ls -la $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang* || true
 
-      # 修补 tflite-support BUILD 文件
       - name: Patch tflite-support BUILD file
         run: |
           sed -i 's|//third_party/bazel_rules/rules_java/java:defs.bzl|@rules_java//java:defs.bzl|' tensorflow_lite_support/java/BUILD
           echo "Patched BUILD file"
 
-      # 修补 tflite-support 的 third_party/repo.bzl
       - name: Patch third_party/repo.bzl
         run: |
           sed -i 's/\.to_list()//g' third_party/repo.bzl
           echo "Patched third_party/repo.bzl"
 
-      # 克隆 TensorFlow 源码并应用所有必要修补
       - name: Clone and patch TensorFlow
         run: |
           git clone --recursive https://github.com/tensorflow/tensorflow.git tensorflow_src
@@ -98,47 +92,37 @@ jobs:
           git submodule update --init --recursive
           touch unused
 
-          # 全面替换 HERMETIC_PYTHON_VERSION 为硬编码字符串 "3.12"
           find . -type f -name "*.bzl" -exec sed -i 's/HERMETIC_PYTHON_VERSION/"3.12"/g' {} \;
-
-          # 删除所有对 python_version_repo 的引用
           find . -type f -exec sed -i '/python_version_repo/d' {} \;
-          # 删除 load generate_api.bzl 的行
           find . -type f -exec sed -i '/load.*generate_api.bzl/d' {} \;
-          # 删除 python_init_ 相关行
           find . -type f -exec sed -i '/python_init_/d' {} \;
 
-          # 设置 NDK 版本为 27（稳健替换）
           sed -i '/ndk_version =/c\    # ndk_version = 0  # commented out\n    ndk_version = 27' third_party/android/android_configure.bzl
 
-          # 修复 repo.bzl 中的路径问题
           sed -i '/ctx.symlink(ctx.path(ctx.attr._root).dirname.get_child(ctx.attr.path), ".")/c\
               # Patched to handle paths with slashes\n    path_parts = ctx.attr.path.split('\''/'\'')\n    p = ctx.path(ctx.attr._root).dirname\n    for part in path_parts:\n        p = p.get_child(part)\n    ctx.symlink(p, ".")' third_party/repo.bzl
 
-          # 验证修补是否成功
-          echo "Verifying HERMETIC_PYTHON_VERSION replacement:"
-          grep -r "HERMETIC_PYTHON_VERSION" . || echo "All occurrences replaced"
           cd ..
 
-      # 先尝试拉取所有依赖，确保外部仓库被下载（不使用crosstool_top）
-      - name: Fetch external dependencies
-        run: |
-          bazel fetch //tensorflow_lite_support/java:tensorflow-lite-support \
-            --fat_apk_cpu=arm64-v8a,armeabi-v7a,x86,x86_64 \
-            ${{ env.BAZEL_CONFIG_FLAGS }} \
-            --override_repository=org_tensorflow=$(pwd)/tensorflow_src \
-            --curses=no \
-            --verbose_failures
-
-      # 正式构建
       - name: Build TFLite Support AAR
         run: |
-          bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
-            --fat_apk_cpu=arm64-v8a,armeabi-v7a,x86,x86_64 \
-            ${{ env.BAZEL_CONFIG_FLAGS }} \
-            --override_repository=org_tensorflow=$(pwd)/tensorflow_src \
-            --curses=no \
-            --show_timestamps \
+          BUILD_FLAGS=(
+            "-c" "opt"
+            "--cxxopt=--std=c++17"
+            "--config=android_arm64"
+            "--fat_apk_cpu=arm64-v8a,armeabi-v7a,x86,x86_64"
+            "--define=android_dexmerger_tool=d8_dexmerger"
+            "--define=android_incremental_dexing_tool=d8_dexbuilder"
+            "--repo_env=HERMETIC_PYTHON_VERSION=3.12"
+            "--show_timestamps"
+            "--incompatible_enable_android_toolchain_resolution=false"
+            "--linkopt=-Wl,--undefined-version"
+            "--linkopt=-Wl,--allow-multiple-definition"
+            "--copt=-D__ANDROID__"
+            "--copt=-UINTEL_MKL"
+            "--override_repository=org_tensorflow=$(pwd)/tensorflow_src"
+          )
+          bazel build //tensorflow_lite_support/java:tensorflow-lite-support "${BUILD_FLAGS[@]}" \
             --verbose_failures
 
       - name: Locate AAR file
