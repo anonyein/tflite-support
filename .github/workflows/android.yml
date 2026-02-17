@@ -94,38 +94,37 @@ jobs:
               # 修补 third_party/repo.bzl
               sed -i 's/\.to_list()//g' third_party/repo.bzl
 
-              # 创建 Android 平台定义
+              # 创建 Android 平台定义（使用 printf 避免 heredoc 问题）
               mkdir -p platform
-              cat > platform/BUILD <<'PLATFORM_EOF'
-              platform(
-                  name = \"android_arm64_v8a\",
-                  constraint_values = [
-                      \"@platforms//os:android\",
-                      \"@platforms//cpu:arm64\",
-                  ],
-              )
-              platform(
-                  name = \"android_armeabi_v7a\",
-                  constraint_values = [
-                      \"@platforms//os:android\",
-                      \"@platforms//cpu:armv7\",
-                  ],
-              )
-              platform(
-                  name = \"android_x86\",
-                  constraint_values = [
-                      \"@platforms//os:android\",
-                      \"@platforms//cpu:x86_32\",
-                  ],
-              )
-              platform(
-                  name = \"android_x86_64\",
-                  constraint_values = [
-                      \"@platforms//os:android\",
-                      \"@platforms//cpu:x86_64\",
-                  ],
-              )
-              PLATFORM_EOF
+              printf '%s\n' \\
+                'platform(' \\
+                '    name = \"android_arm64_v8a\",' \\
+                '    constraint_values = [' \\
+                '        \"@platforms//os:android\",' \\
+                '        \"@platforms//cpu:arm64\",' \\
+                '    ],' \\
+                ')' \\
+                'platform(' \\
+                '    name = \"android_armeabi_v7a\",' \\
+                '    constraint_values = [' \\
+                '        \"@platforms//os:android\",' \\
+                '        \"@platforms//cpu:armv7\",' \\
+                '    ],' \\
+                ')' \\
+                'platform(' \\
+                '    name = \"android_x86\",' \\
+                '    constraint_values = [' \\
+                '        \"@platforms//os:android\",' \\
+                '        \"@platforms//cpu:x86_32\",' \\
+                '    ],' \\
+                ')' \\
+                'platform(' \\
+                '    name = \"android_x86_64\",' \\
+                '    constraint_values = [' \\
+                '        \"@platforms//os:android\",' \\
+                '        \"@platforms//cpu:x86_64\",' \\
+                '    ],' \\
+                ')' > platform/BUILD
 
               # 计算 Python 库路径
               PYTHON_LIB_PATH=\$(python3 -c 'import site; print(site.getsitepackages()[0])')
