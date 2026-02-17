@@ -80,17 +80,16 @@ jobs:
           sed -i 's/\.to_list()//g' third_party/repo.bzl
           echo "Patched third_party/repo.bzl"
 
-      # 修补 flatbuffers workspace.bzl 添加镜像 URL
-      - name: Patch flatbuffers workspace.bzl to add mirror URL
+      # 手动下载并修补 flatbuffers 源码
+      - name: Download and patch flatbuffers
         run: |
-          FLATBUFFERS_WORKSPACE="third_party/flatbuffers/workspace.bzl"
-          if [ -f "$FLATBUFFERS_WORKSPACE" ]; then
-            # 在 urls = [ 行后插入镜像URL作为第一项（假设版本为 v2.0.0，可根据实际版本调整）
-            sed -i '/urls = \[/a \        "https://mirror.tensorflow.org/github.com/google/flatbuffers/archive/v2.0.0.tar.gz",' "$FLATBUFFERS_WORKSPACE"
-            echo "Patched $FLATBUFFERS_WORKSPACE"
-          else
-            echo "Warning: $FLATBUFFERS_WORKSPACE not found"
-          fi
+          FLATBUFFERS_VERSION="v2.0.0"
+          wget -q https://github.com/google/flatbuffers/archive/${FLATBUFFERS_VERSION}.tar.gz -O flatbuffers.tar.gz
+          mkdir -p flatbuffers_src
+          tar -xzf flatbuffers.tar.gz -C flatbuffers_src --strip-components=1
+          # 修补 build_defs.bzl 中的错误路径
+          sed -i 's|//third_party/bazel_rules/rules_java/java:java_library.bzl|@rules_java//java:defs.bzl|' flatbuffers_src/build_defs.bzl
+          echo "Patched flatbuffers build_defs.bzl"
 
       # 创建 Android 平台定义（符合 Bazel 7.0+ 规范）
       - name: Create Android platform definitions
@@ -137,8 +136,8 @@ jobs:
         run: |
           echo "lib_path=$(python3 -c 'import site; print(site.getsitepackages()[0])')" >> "$GITHUB_OUTPUT"
 
-      # 先拉取所有依赖，确保 Python 工具链正确初始化
-      - name: Fetch external dependencies with Python env
+      # 先拉取所有依赖，确保 Python 工具链正确初始化（但不包括 flatbuffers，因为我们将覆盖它）
+      - name: Fetch external dependencies with Python env (excluding flatbuffers)
         run: |
           bazel fetch //tensorflow_lite_support/java:tensorflow-lite-support \
             --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
@@ -146,9 +145,9 @@ jobs:
             --repo_env=PYTHON_LIB_PATH=${{ steps.python.outputs.lib_path }} \
             --repo_env=TF_PYTHON_VERSION=3.12 \
             --curses=no \
-            --noenable_bzlmod
+            --noenable_bzlmod || true  # 允许失败，因为 flatbuffers 可能仍然失败
 
-      # 正式构建，使用新平台标志并禁用 Bzlmod
+      # 正式构建，使用新平台标志、禁用 Bzlmod，并覆盖 flatbuffers 仓库
       - name: Build TFLite Support AAR
         run: |
           bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
@@ -157,6 +156,7 @@ jobs:
             --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
             --repo_env=PYTHON_LIB_PATH=${{ steps.python.outputs.lib_path }} \
             --repo_env=TF_PYTHON_VERSION=3.12 \
+            --override_repository=flatbuffers=$(pwd)/flatbuffers_src \
             --curses=no \
             --show_timestamps \
             --verbose_failures \
