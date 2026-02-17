@@ -1,4 +1,4 @@
-name: Build TFLite Support Android AAR (Fixed)
+name: Build TFLite Support Android AAR (Bazel 7.0.0 with Platforms)
 
 on:
   push:
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   build-and-package:
-    name: "Build TFLite Support AAR"
+    name: "Build TFLite Support AAR (all arch)"
     runs-on: ubuntu-latest
 
     steps:
@@ -26,7 +26,7 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      # 移除 .bazelversion 以使用自定义 Bazel 版本
+      # 移除 .bazelversion 以强制使用我们指定的 Bazel 7.0.0
       - name: Remove .bazelversion
         run: |
           if [ -f .bazelversion ]; then
@@ -39,11 +39,11 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # 使用 Bazel 6.4.0（支持 provider(init=...)）
+      # 显式指定 Bazel 7.0.0
       - name: Setup Bazel
         uses: bazel-contrib/setup-bazel@0.9.0
         with:
-          bazel-version: 6.4.0
+          bazel-version: 7.0.0
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -66,48 +66,65 @@ jobs:
         run: |
           sed -i 's|//third_party/bazel_rules/rules_java/java:defs.bzl|@rules_java//java:defs.bzl|' tensorflow_lite_support/java/BUILD
 
-      # 修补 third_party/repo.bzl 中的 to_list() 错误
+      # 修补 third_party/repo.bzl 中的 to_list() 错误（flatbuffers 拉取失败问题）
       - name: Patch third_party/repo.bzl to fix flatbuffers fetch
         run: |
           sed -i 's/\.to_list()//g' third_party/repo.bzl
 
-      # 克隆 TensorFlow 源码（使用与 WORKSPACE 中相同的 commit）
-      - name: Clone TensorFlow source
+      # 创建 Android 平台定义（符合 Bazel 7.0+ 规范）
+      - name: Create Android platform definitions
         run: |
-          # 从 WORKSPACE 中提取 TensorFlow commit（简化版，假设 commit 固定）
-          TF_COMMIT="777924f5575e7e6e22e4f47be211c2a94f59c4f5"  # 需根据实际情况修改
-          git clone https://github.com/tensorflow/tensorflow.git tensorflow_src
-          cd tensorflow_src
-          git checkout $TF_COMMIT
+          mkdir -p platform
+          cat > platform/BUILD <<EOF
+          platform(
+              name = "android_arm64_v8a",
+              constraint_values = [
+                  "@platforms//os:android",
+                  "@platforms//cpu:arm64",
+              ],
+          )
 
-      # 修补 TensorFlow 中的 generate_api.bzl（删除 init 参数）
-      - name: Patch generate_api.bzl for Bazel 6 compatibility
-        run: |
-          sed -i 's/,\s*init\s*=\s*[^,)]*//g' tensorflow_src/tensorflow/python/tools/api/generator2/generate_api.bzl
+          platform(
+              name = "android_armeabi_v7a",
+              constraint_values = [
+                  "@platforms//os:android",
+                  "@platforms//cpu:armv7",
+              ],
+          )
 
-      # 修补 flatbuffers workspace 添加镜像 URL
-      - name: Patch flatbuffers workspace to add mirror URL
-        run: |
-          sed -i '/urls = \[/,/\]/ s|"https://github.com/google/flatbuffers/archive/.*\.tar.gz"|"https://mirror.tensorflow.org/github.com/google/flatbuffers/archive/v2.0.0.tar.gz", &|' tensorflow_src/third_party/flatbuffers/workspace.bzl
+          platform(
+              name = "android_x86",
+              constraint_values = [
+                  "@platforms//os:android",
+                  "@platforms//cpu:x86_32",
+              ],
+          )
 
-      # 计算 Python 库路径
+          platform(
+              name = "android_x86_64",
+              constraint_values = [
+                  "@platforms//os:android",
+                  "@platforms//cpu:x86_64",
+              ],
+          )
+          EOF
+          echo "Created platform/BUILD with Android platform definitions."
+
+      # 计算 Python 库路径（用于 Hermetic Python）
       - name: Compute Python library path
         id: python
         run: |
           echo "lib_path=$(python3 -c 'import site; print(site.getsitepackages()[0])')" >> "$GITHUB_OUTPUT"
 
-      # 构建，使用 --override_repository 指向本地修补后的 TensorFlow
+      # 正式构建，使用新平台标志并禁用 Bzlmod
       - name: Build TFLite Support AAR
         run: |
           bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
-            --crosstool_top=//external:android/crosstool \
-            --host_crosstool_top=@bazel_tools//tools/cpp:toolchain \
-            --fat_apk_cpu=arm64-v8a,armeabi-v7a,x86,x86_64 \
+            --android_platforms=//platform:android_arm64_v8a,//platform:android_armeabi_v7a,//platform:android_x86,//platform:android_x86_64 \
             --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
             --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
             --repo_env=PYTHON_LIB_PATH=${{ steps.python.outputs.lib_path }} \
             --repo_env=TF_PYTHON_VERSION=3.12 \
-            --override_repository=org_tensorflow=$(pwd)/tensorflow_src \
             --curses=no \
             --show_timestamps \
             --verbose_failures \
