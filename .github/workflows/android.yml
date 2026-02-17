@@ -65,6 +65,12 @@ jobs:
           echo "Patched BUILD file:"
           grep -n "rules_java" tensorflow_lite_support/java/BUILD || true
 
+      # 修复 third_party/repo.bzl 中的语法错误（flatbuffers 拉取失败问题）
+      - name: Patch third_party/repo.bzl to fix flatbuffers fetch
+        run: |
+          sed -i 's/\.to_list()//g' third_party/repo.bzl
+          echo "Patched third_party/repo.bzl"
+
       # 计算 Python 库路径（用于后续环境变量）
       - name: Compute Python library path
         id: python
@@ -75,6 +81,7 @@ jobs:
       - name: Fetch external dependencies with Python env
         run: |
           bazel fetch //tensorflow_lite_support/java:tensorflow-lite-support \
+            --config=android_arm64 \
             --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
             --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
             --repo_env=PYTHON_LIB_PATH=${{ steps.python.outputs.lib_path }} \
