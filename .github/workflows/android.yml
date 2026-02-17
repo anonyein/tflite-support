@@ -1,4 +1,4 @@
-name: Build TFLite Support AAR (Final with NDK r25c)
+name: Build TFLite Support AAR (Java 17, NDK r27)
 
 on:
   push:
@@ -32,39 +32,47 @@ jobs:
           #!/bin/bash
           set -ex
 
-          # Install extra dependencies
-          apt-get update && apt-get install -y openjdk-8-jdk wget unzip
+          # Install Java 17 (primary) and Java 8 (for sdkmanager)
+          apt-get update && apt-get install -y openjdk-17-jdk openjdk-8-jre-headless wget unzip
 
-          export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+          # Set primary Java to 17
+          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
           export PATH=$JAVA_HOME/bin:$PATH
 
-          # Install Android SDK
+          # Java 8 location for sdkmanager
+          JAVA8_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+
+          # Install Android SDK using Java 8
           mkdir -p /opt/android/sdk
           cd /opt/android/sdk
           wget -q https://dl.google.com/android/repository/sdk-tools-linux-4333796.zip
           unzip -q sdk-tools-linux-4333796.zip
           rm sdk-tools-linux-4333796.zip
           export ANDROID_HOME=/opt/android/sdk
-          export ANDROID_SDK_HOME=$ANDROID_HOME  # for configure.py
-          export PATH=$ANDROID_HOME/tools:$ANDROID_HOME/tools/bin:$ANDROID_HOME/platform-tools:$PATH
+          export ANDROID_SDK_HOME=$ANDROID_HOME
 
-          yes | sdkmanager --licenses || true
-          sdkmanager "platforms;android-21" "build-tools;30.0.3"
+          # Run sdkmanager with Java 8
+          (
+            export JAVA_HOME=$JAVA8_HOME
+            export PATH=$JAVA8_HOME/bin:$PATH
+            yes | $ANDROID_HOME/tools/bin/sdkmanager --licenses || true
+            $ANDROID_HOME/tools/bin/sdkmanager "platforms;android-21" "build-tools;30.0.3"
+          )
 
-          # Install NDK r25c (supported by Bazel)
+          # Install NDK r27 (no Java needed)
           cd /opt
-          wget -q https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
-          unzip -q android-ndk-r25c-linux.zip
-          mv android-ndk-r25c android-ndk-25
-          rm android-ndk-r25c-linux.zip
-          export ANDROID_NDK_HOME=/opt/android-ndk-25
+          wget -q https://dl.google.com/android/repository/android-ndk-r27-linux.zip
+          unzip -q android-ndk-r27-linux.zip
+          mv android-ndk-r27 android-ndk-27
+          rm android-ndk-r27-linux.zip
+          export ANDROID_NDK_HOME=/opt/android-ndk-27
           export PATH=$ANDROID_NDK_HOME:$PATH
 
-          echo "Pkg.Revision = 25.2.9519653" > $ANDROID_NDK_HOME/source.properties
+          echo "Pkg.Revision = 27.0.0" > $ANDROID_NDK_HOME/source.properties
           echo "Pkg.Desc = Android NDK" >> $ANDROID_NDK_HOME/source.properties
 
           export ANDROID_API_LEVEL=21
-          export ANDROID_NDK_API_LEVEL=25
+          export ANDROID_NDK_API_LEVEL=27
           export ANDROID_BUILD_TOOLS_VERSION=30.0.3
           export ANDROID_SDK_API_LEVEL=21
 
@@ -89,13 +97,14 @@ jobs:
           export TF_NEED_ROCM=0
           export TF_NEED_TENSORRT=0
           export TF_DOWNLOAD_CLANG=0
-          # Ensure configure.py finds Android SDK
           export ANDROID_SDK_HOME=/opt/android/sdk
-          export ANDROID_NDK_HOME=/opt/android-ndk-25
+          export ANDROID_NDK_HOME=/opt/android-ndk-27
+
+          # Run configure.py (it will use JAVA_HOME which is 17)
           yes '' | python3 configure.py
 
-          # Fix android_configure.bzl: set NDK version to 25
-          sed -i 's/ndk_version =.*/    ndk_version = 25/' third_party/android/android_configure.bzl
+          # Fix android_configure.bzl: set NDK version to 27
+          sed -i 's/ndk_version =.*/    ndk_version = 27/' third_party/android/android_configure.bzl
 
           # Fix vendored path issue in repo.bzl
           sed -i '/ctx.symlink(ctx.path(ctx.attr._root).dirname.get_child(ctx.attr.path), ".")/c\
