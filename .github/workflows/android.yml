@@ -1,4 +1,4 @@
-name: Build TFLite Support AAR (Final with Python Config)
+name: Build TFLite Support AAR (Final with Clang Disabled)
 
 on:
   push:
@@ -76,13 +76,18 @@ jobs:
           git submodule update --init --recursive
           touch unused
 
-          # Run configure.py to set up Hermetic Python
+          # Set environment variables for configure.py
           export TF_NEED_ANDROID=1
           export TF_SET_ANDROID_WORKSPACE=1
           export HERMETIC_PYTHON_VERSION=3.12
           export PYTHON_BIN_PATH=/usr/bin/python3
           export PYTHON_LIB_PATH=$(python3 -c 'import site; print(site.getsitepackages()[0])')
           export TF_PYTHON_VERSION=3.12
+          export TF_NEED_CLANG=0  # Disable clang requirement
+          export TF_NEED_CUDA=0
+          export TF_NEED_ROCM=0
+          export TF_NEED_TENSORRT=0
+          export TF_DOWNLOAD_CLANG=0
           yes '' | python3 configure.py
 
           # Fix android_configure.bzl: set NDK version to 23
@@ -133,7 +138,7 @@ jobs:
           )
           PLATFORM_EOF
 
-          # Python lib path
+          # Python lib path (reuse existing variable)
           PYTHON_LIB_PATH=$(python3 -c 'import site; print(site.getsitepackages()[0])')
 
           # Build
