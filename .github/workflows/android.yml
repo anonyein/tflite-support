@@ -1,4 +1,4 @@
-name: Build tflite-support Android AAR (终极方案)
+name: Build tflite-support Android AAR (官方指南)
 
 on:
   push:
@@ -15,129 +15,82 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-aar:
-    name: "Build tflite-support AAR"
+  build:
     runs-on: ubuntu-latest
     env:
-      RELEASE_VERSION: "0.0.0-nightly-SNAPSHOT"
-      ANDROID_API_LEVEL: "21"
-      NDK_VERSION: "r27"
+      # Android SDK 和 NDK 环境变量（供 configure 脚本使用）
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_HOME: /usr/local/lib/android/sdk
+      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.0.0   # 使用 NDK 27
+      ANDROID_SDK_API_LEVEL: "23"        # 官方推荐 23 或更高
+      ANDROID_NDK_API_LEVEL: "21"        # 官方推荐 21（最低支持）
+      ANDROID_BUILD_TOOLS_VERSION: "30.0.3"
+      JAVA_HOME: /usr/lib/jvm/temurin-17-jdk-amd64
 
     steps:
       - name: Checkout tflite-support repository
         uses: actions/checkout@v4
         with:
+          repository: anonyein/tflite-support
+          ref: master
           path: tflite-support
-          fetch-depth: 0
-          submodules: recursive
 
-      - name: Setup Bazel 5.1.1
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install Bazelisk
+        run: npm install -g @bazel/bazelisk
+
+      - name: Set up Android SDK and NDK
         run: |
-          wget -q https://github.com/bazelbuild/bazel/releases/download/5.1.1/bazel-5.1.1-linux-x86_64 -O bazel
-          chmod +x bazel
-          sudo mv bazel /usr/local/bin/bazel
-          bazel --version
+          # 安装命令行工具
+          mkdir -p $ANDROID_HOME/cmdline-tools
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q commandlinetools-linux-11076708_latest.zip -d $ANDROID_HOME/cmdline-tools
+          mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
+          export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin
 
-      - name: Install system dependencies
+          yes | sdkmanager --licenses
+          sdkmanager "platforms;android-$ANDROID_SDK_API_LEVEL" "build-tools;$ANDROID_BUILD_TOOLS_VERSION"
+
+          # 安装 NDK 27
+          wget -q https://dl.google.com/android/repository/android-ndk-r27-linux.zip
+          unzip -q android-ndk-r27-linux.zip -d /tmp
+          sudo mv /tmp/android-ndk-r27 $ANDROID_NDK_HOME
+
+      - name: Clone TensorFlow (required by tflite-support WORKSPACE)
+        working-directory: tflite-support
         run: |
-          sudo apt-get update
-          sudo apt-get install -y python3 openjdk-17-jdk wget unzip
-          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> "$GITHUB_ENV"
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android NDK r27
-        run: |
-          wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip
-          unzip -q android-ndk-${NDK_VERSION}-linux.zip -d /tmp
-          echo "ANDROID_NDK_HOME=/tmp/android-ndk-${NDK_VERSION}" >> "$GITHUB_ENV"
-        env:
-          NDK_VERSION: ${{ env.NDK_VERSION }}
-
-      - name: Export Android environment
-        run: |
-          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
-
-      - name: Create build script
-        run: |
-          cat > build.sh <<'EOF'
-          #!/bin/bash
-          set -ex
-
-          # 设置 Android 环境变量
-          export ANDROID_NDK_HOME=/tmp/android-ndk-r27
-          export ANDROID_HOME=$ANDROID_HOME
-          export ANDROID_SDK_HOME=$ANDROID_HOME
-          export ANDROID_API_LEVEL=21
-          export ANDROID_NDK_API_LEVEL=27
-          export ANDROID_BUILD_TOOLS_VERSION=30.0.3
-          export ANDROID_SDK_API_LEVEL=21
-
-          cd tflite-support
-
-          # 修补 tflite-support 自身的 BUILD 文件 (load 路径错误)
-          sed -i 's|//third_party/bazel_rules/rules_java/java:defs.bzl|@rules_java//java:defs.bzl|' tensorflow_lite_support/java/BUILD
-          # 修补 tflite-support 自身的 repo.bzl (to_list 错误)
-          sed -i 's/\.to_list()//g' third_party/repo.bzl
-
-          # 克隆 TensorFlow (tflite-support 依赖的版本)
           git clone --recursive https://github.com/tensorflow/tensorflow.git tensorflow_src
           cd tensorflow_src
-          # 切换到 tflite-support WORKSPACE 中指定的 commit
+          # 切换到 tflite-support WORKSPACE 中指定的 commit（可从 WORKSPACE 文件中提取）
           git checkout 777924f5575e7e6e22e4f47be211c2a94f59c4f5
           git submodule update --init --recursive
 
-          # 创建 unused 文件，解决一些旧版 vendoring 问题
-          touch unused
+      - name: Configure TensorFlow (生成 .tf_configure.bazelrc)
+        working-directory: tflite-support/tensorflow_src
+        run: |
+          export TF_NEED_ANDROID=1
+          export TF_SET_ANDROID_WORKSPACE=1
+          # 环境变量已经在上层设置，configure 脚本会自动读取
+          yes '' | python3 configure.py
 
-          # --- 核心修复: 在 TensorFlow WORKSPACE 中彻底禁用 Hermetic Python ---
-          # 注释掉所有 python_init_* 相关的行
-          sed -i '/python_init_rules/ s/^/# /' WORKSPACE
-          sed -i '/python_init_repositories/ s/^/# /' WORKSPACE
-          sed -i '/python_init_toolchains/ s/^/# /' WORKSPACE
-          sed -i '/python_init_pip/ s/^/# /' WORKSPACE
-          sed -i '/install_deps/ s/^/# /' WORKSPACE
-          # 注释掉可能加载 python_version_repo 的其他行
-          sed -i '/python_version_repo/ s/^/# /' tensorflow/workspace3.bzl 2>/dev/null || true
-          sed -i '/python_version_repo/ s/^/# /' tensorflow/workspace.bzl 2>/dev/null || true
-
-          # 确保 NDK 版本正确 (可选，但保留无害)
-          sed -i 's/ndk_version =.*/    ndk_version = 27/' third_party/android/android_configure.bzl
-
-          # 修复 repo.bzl 中的路径问题 (保留，以防万一)
-          sed -i '/ctx.symlink(ctx.path(ctx.attr._root).dirname.get_child(ctx.attr.path), ".")/c\
-              # Patched to handle paths with slashes\n    path_parts = ctx.attr.path.split('\''/'\'')\n    p = ctx.path(ctx.attr._root).dirname\n    for part in path_parts:\n        p = p.get_child(part)\n    ctx.symlink(p, ".")' third_party/repo.bzl
-          cd ..
-
-          # 构建最终的 AAR
+      - name: Build tflite-support AAR
+        working-directory: tflite-support
+        run: |
+          # 使用官方推荐的构建命令，指定目标架构
           bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
-            --config=android_arm64 \
+            -c opt \
             --fat_apk_cpu=arm64-v8a,armeabi-v7a,x86,x86_64 \
-            --incompatible_enable_android_toolchain_resolution=false \
-            --linkopt=-Wl,--undefined-version \
-            --linkopt=-Wl,--allow-multiple-definition \
-            --copt=-D__ANDROID__ \
-            --copt=-UINTEL_MKL \
+            --host_crosstool_top=@bazel_tools//tools/cpp:toolchain \
             --override_repository=org_tensorflow=$(pwd)/tensorflow_src \
             --verbose_failures
 
-          # 准备输出目录
-          mkdir -p gen
-          VERSION=${RELEASE_VERSION:-0.0.0-nightly-SNAPSHOT}
-          find bazel-bin/ -name "*.aar" -exec cp {} gen/ \;
-          EOF
-          chmod +x build.sh
-
-      - name: Run build script
-        run: ./build.sh
-        env:
-          RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
-
-      - name: Upload AAR artifacts
+      - name: Upload AAR
         uses: actions/upload-artifact@v4
         with:
-          name: tflite-support-android-aars
-          path: tflite-support/gen/
-          if-no-files-found: error
+          name: tflite-support-aar
+          path: tflite-support/bazel-bin/tensorflow_lite_support/java/*.aar
