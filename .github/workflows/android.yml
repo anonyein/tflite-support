@@ -1,4 +1,4 @@
-name: Build TFLite Support Android AAR (Bazel 7.0.0 with Platforms)
+name: Build TFLite Support Android AAR (Final)
 
 on:
   push:
@@ -26,14 +26,10 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      # 强制删除 .bazelversion 文件，防止干扰
       - name: Remove .bazelversion
         run: |
           if [ -f .bazelversion ]; then
             rm -v .bazelversion
-            echo "Removed .bazelversion"
-          else
-            echo "No .bazelversion found"
           fi
 
       - name: Setup Java 17
@@ -42,14 +38,12 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # 手动下载并安装 Bazel 7.0.0
       - name: Install Bazel 7.0.0
         run: |
           BAZEL_VERSION=7.0.0
           wget -q https://github.com/bazelbuild/bazel/releases/download/${BAZEL_VERSION}/bazel-${BAZEL_VERSION}-linux-x86_64 -O bazel
           chmod +x bazel
           sudo mv bazel /usr/local/bin/bazel
-          echo "Bazel installed:"
           bazel --version
 
       - name: Set up Android SDK
@@ -72,13 +66,11 @@ jobs:
       - name: Patch BUILD file to use correct rules_java load path
         run: |
           sed -i 's|//third_party/bazel_rules/rules_java/java:defs.bzl|@rules_java//java:defs.bzl|' tensorflow_lite_support/java/BUILD
-          echo "Patched BUILD file"
 
       # 修补 third_party/repo.bzl 中的 to_list() 错误
       - name: Patch third_party/repo.bzl to fix to_list error
         run: |
           sed -i 's/\.to_list()//g' third_party/repo.bzl
-          echo "Patched third_party/repo.bzl"
 
       # 手动下载并修补 flatbuffers 源码
       - name: Download and patch flatbuffers
@@ -87,11 +79,9 @@ jobs:
           wget -q https://github.com/google/flatbuffers/archive/${FLATBUFFERS_VERSION}.tar.gz -O flatbuffers.tar.gz
           mkdir -p flatbuffers_src
           tar -xzf flatbuffers.tar.gz -C flatbuffers_src --strip-components=1
-          # 修补 build_defs.bzl 中的错误路径
           sed -i 's|//third_party/bazel_rules/rules_java/java:java_library.bzl|@rules_java//java:defs.bzl|' flatbuffers_src/build_defs.bzl
-          echo "Patched flatbuffers build_defs.bzl"
 
-      # 创建 Android 平台定义（符合 Bazel 7.0+ 规范）
+      # 创建 Android 平台定义
       - name: Create Android platform definitions
         run: |
           mkdir -p platform
@@ -103,7 +93,6 @@ jobs:
                   "@platforms//cpu:arm64",
               ],
           )
-
           platform(
               name = "android_armeabi_v7a",
               constraint_values = [
@@ -111,7 +100,6 @@ jobs:
                   "@platforms//cpu:armv7",
               ],
           )
-
           platform(
               name = "android_x86",
               constraint_values = [
@@ -119,7 +107,6 @@ jobs:
                   "@platforms//cpu:x86_32",
               ],
           )
-
           platform(
               name = "android_x86_64",
               constraint_values = [
@@ -128,15 +115,25 @@ jobs:
               ],
           )
           EOF
-          echo "Created platform/BUILD with Android platform definitions."
 
-      # 计算 Python 库路径（用于 Hermetic Python）
+      # 计算 Python 库路径
       - name: Compute Python library path
         id: python
         run: |
           echo "lib_path=$(python3 -c 'import site; print(site.getsitepackages()[0])')" >> "$GITHUB_OUTPUT"
 
-      # 正式构建，使用新平台标志、禁用 Bzlmod，并覆盖 flatbuffers 仓库
+      # 同步外部依赖，确保 Hermetic Python 仓库被正确创建
+      - name: Sync external dependencies with overrides
+        run: |
+          bazel sync --configure \
+            --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
+            --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
+            --repo_env=PYTHON_LIB_PATH=${{ steps.python.outputs.lib_path }} \
+            --repo_env=TF_PYTHON_VERSION=3.12 \
+            --override_repository=flatbuffers=$(pwd)/flatbuffers_src \
+            --noenable_bzlmod || true   # 允许失败，但尽力同步
+
+      # 正式构建
       - name: Build TFLite Support AAR
         run: |
           bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
@@ -160,7 +157,6 @@ jobs:
             exit 1
           fi
           echo "aar-path=$AAR_PATH" >> "$GITHUB_OUTPUT"
-          echo "Found AAR at $AAR_PATH"
 
       - name: Upload AAR artifact
         uses: actions/upload-artifact@v4
