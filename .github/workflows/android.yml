@@ -1,4 +1,4 @@
-name: Build tflite-support AAR (Docker with Java 8 for SDK, no repo.bzl patch)
+name: Build tflite-support AAR (Final with Python patch)
 
 on:
   push:
@@ -102,8 +102,26 @@ jobs:
                 sed -i '/@python_version_repo/d' xla/third_party/py/python_configure.bzl
               fi
 
-              # 注意：不再修补 repo.bzl 中的 vendoring 路径，因为我们已经创建了 unused 文件，
-              # 之前的修补可能导致语法错误，因此移除。
+              # 使用 Python 精确修补 third_party/repo.bzl 中的 vendoring 路径问题
+              python3 <<'PY_EOF'
+              import re
+              with open('third_party/repo.bzl', 'r') as f:
+                  content = f.read()
+              # 匹配 _tf_vendored_impl 中的 ctx.symlink 行
+              pattern = r'(ctx\.symlink\(ctx\.path\(ctx\.attr\._root\)\.dirname\.get_child\(ctx\.attr\.path\), *"\.",?\))'
+              replacement = '''
+                  # Patched to handle paths with slashes
+                  path_parts = ctx.attr.path.split('/')
+                  p = ctx.path(ctx.attr._root).dirname
+                  for part in path_parts:
+                      p = p.get_child(part)
+                  ctx.symlink(p, ".")
+              '''
+              new_content = re.sub(pattern, replacement, content, flags=re.DOTALL)
+              with open('third_party/repo.bzl', 'w') as f:
+                  f.write(new_content)
+              print("Patched third_party/repo.bzl successfully")
+              PY_EOF
 
               cd ..
 
