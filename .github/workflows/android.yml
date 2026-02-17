@@ -1,4 +1,4 @@
-name: Build TFLite Support AAR (模仿LiteRT脚本，修补googletest)
+name: Build TFLite Support AAR (模仿LiteRT脚本，彻底修补googletest)
 
 on:
   push:
@@ -111,8 +111,15 @@ jobs:
           sed -i '/ctx.symlink(ctx.path(ctx.attr._root).dirname.get_child(ctx.attr.path), ".")/c\
               # Patched to handle paths with slashes\n    path_parts = ctx.attr.path.split('\''/'\'')\n    p = ctx.path(ctx.attr._root).dirname\n    for part in path_parts:\n        p = p.get_child(part)\n    ctx.symlink(p, ".")' third_party/repo.bzl
 
-          # 注释掉 grpc_extra_deps.bzl 中导致 googletest 缺失的行
-          find . -path "*/grpc_extra_deps.bzl" -exec sed -i '/googletest_deps.bzl/s/^/# /' {} \;
+          # 注释掉 grpc_extra_deps.bzl 中导致 googletest 缺失的行（精确查找并注释）
+          GRPC_EXTRA_DEPS=$(find . -type f -name "grpc_extra_deps.bzl" 2>/dev/null | head -1)
+          if [ -n "$GRPC_EXTRA_DEPS" ]; then
+            echo "Patching $GRPC_EXTRA_DEPS"
+            sed -i '/googletest_deps.bzl/s/^/# /' "$GRPC_EXTRA_DEPS"
+            grep -n "googletest_deps.bzl" "$GRPC_EXTRA_DEPS" && echo "Warning: line still present" || echo "Line commented successfully"
+          else
+            echo "grpc_extra_deps.bzl not found"
+          fi
 
           cd ..
 
