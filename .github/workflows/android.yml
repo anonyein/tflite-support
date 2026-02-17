@@ -26,7 +26,7 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      # 强制删除 .bazelversion 文件，防止覆盖 Bazel 版本
+      # 强制删除 .bazelversion 文件，防止干扰
       - name: Remove .bazelversion
         run: |
           if [ -f .bazelversion ]; then
@@ -42,15 +42,15 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # 显式指定 Bazel 7.0.0
-      - name: Setup Bazel
-        uses: bazel-contrib/setup-bazel@0.9.0
-        with:
-          bazel-version: 7.0.0
-
-      # 验证 Bazel 版本
-      - name: Verify Bazel version
-        run: bazel --version
+      # 手动下载并安装 Bazel 7.0.0
+      - name: Install Bazel 7.0.0
+        run: |
+          BAZEL_VERSION=7.0.0
+          wget -q https://github.com/bazelbuild/bazel/releases/download/${BAZEL_VERSION}/bazel-${BAZEL_VERSION}-linux-x86_64 -O bazel
+          chmod +x bazel
+          sudo mv bazel /usr/local/bin/bazel
+          echo "Bazel installed:"
+          bazel --version
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
