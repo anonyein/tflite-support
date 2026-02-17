@@ -1,4 +1,4 @@
-name: Build TFLite Support AAR (Nuclear Option + xla patch)
+name: Build TFLite Support Android AAR (借鉴LiteRT写法)
 
 on:
   push:
@@ -15,9 +15,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-aar:
+  build-and-package:
     name: "Build TFLite Support AAR"
     runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: "0.0.0-nightly-SNAPSHOT"
+      ANDROID_API_LEVEL: "21"
+      NDK_VERSION: "r27"
 
     steps:
       - name: Checkout repository
@@ -26,53 +30,65 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Install dependencies
+      - name: Setup Bazel 7.0.0
         run: |
-          sudo apt-get update
-          sudo apt-get install -y openjdk-17-jdk openjdk-8-jre-headless wget unzip
-          sudo update-alternatives --set java /usr/lib/jvm/java-17-openjdk-amd64/bin/java
-
-      - name: Install Bazel 5.1.1
-        run: |
-          wget -q https://github.com/bazelbuild/bazel/releases/download/5.1.1/bazel-5.1.1-linux-x86_64 -O bazel
+          wget -q https://github.com/bazelbuild/bazel/releases/download/7.0.0/bazel-7.0.0-linux-x86_64 -O bazel
           chmod +x bazel
           sudo mv bazel /usr/local/bin/bazel
           bazel --version
 
-      - name: Install Android SDK and NDK
+      - name: Install system dependencies
         run: |
-          export JAVA8_HOME=/usr/lib/jvm/java-8-openjdk-amd64
-          mkdir -p $HOME/android/sdk
-          cd $HOME/android/sdk
-          wget -q https://dl.google.com/android/repository/sdk-tools-linux-4333796.zip
-          unzip -q sdk-tools-linux-4333796.zip
-          rm sdk-tools-linux-4333796.zip
-          export ANDROID_HOME=$HOME/android/sdk
-          export PATH=$ANDROID_HOME/tools:$ANDROID_HOME/tools/bin:$ANDROID_HOME/platform-tools:$PATH
-          (
-            export JAVA_HOME=$JAVA8_HOME
-            export PATH=$JAVA8_HOME/bin:$PATH
-            yes | $ANDROID_HOME/tools/bin/sdkmanager --licenses || true
-            $ANDROID_HOME/tools/bin/sdkmanager "platforms;android-21" "build-tools;30.0.3"
-          )
-          cd $HOME
-          wget -q https://dl.google.com/android/repository/android-ndk-r27-linux.zip
-          unzip -q android-ndk-r27-linux.zip
-          mv android-ndk-r27 android-ndk-27
-          rm android-ndk-r27-linux.zip
-          export ANDROID_NDK_HOME=$HOME/android-ndk-27
-          echo "Pkg.Revision = 27.0.0" > $ANDROID_NDK_HOME/source.properties
-          echo "Pkg.Desc = Android NDK" >> $ANDROID_NDK_HOME/source.properties
-          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-          echo "ANDROID_SDK_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
-          echo "ANDROID_API_LEVEL=21" >> $GITHUB_ENV
-          echo "ANDROID_NDK_API_LEVEL=27" >> $GITHUB_ENV
-          echo "ANDROID_BUILD_TOOLS_VERSION=30.0.3" >> $GITHUB_ENV
-          echo "ANDROID_SDK_API_LEVEL=21" >> $GITHUB_ENV
-          echo "$ANDROID_HOME/tools:$ANDROID_HOME/tools/bin:$ANDROID_HOME/platform-tools:$ANDROID_NDK_HOME" >> $GITHUB_PATH
+          sudo apt-get update
+          sudo apt-get install -y python3 openjdk-17-jdk wget unzip
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> "$GITHUB_ENV"
 
-      - name: Clone and brutally patch TensorFlow (including xla)
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK r27
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip
+          unzip -q android-ndk-${NDK_VERSION}-linux.zip -d /tmp
+          NDK_PATH=/tmp/android-ndk-${NDK_VERSION}
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
+          ls -la $NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/clang* || exit 1
+        env:
+          NDK_VERSION: ${{ env.NDK_VERSION }}
+
+      - name: Export Android environment
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> "$GITHUB_ENV"
+
+      - name: Configure .bazelrc for NDK
+        run: |
+          echo "build --repo_env=ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> .bazelrc
+          echo "build --action_env=ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> .bazelrc
+
+      - name: Verify Android paths
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_HOME=$ANDROID_SDK_HOME"
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+          ls -la $ANDROID_HOME/platforms || true
+          ls -la $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang* || true
+
+      # 修补 tflite-support BUILD 文件中的错误 load 路径
+      - name: Patch tflite-support BUILD file
+        run: |
+          sed -i 's|//third_party/bazel_rules/rules_java/java:defs.bzl|@rules_java//java:defs.bzl|' tensorflow_lite_support/java/BUILD
+          echo "Patched BUILD file"
+
+      # 修补 tflite-support 的 third_party/repo.bzl (to_list 错误)
+      - name: Patch third_party/repo.bzl
+        run: |
+          sed -i 's/\.to_list()//g' third_party/repo.bzl
+          echo "Patched third_party/repo.bzl"
+
+      # 克隆 TensorFlow 源码并应用所有必要的修补
+      - name: Clone and patch TensorFlow
         run: |
           git clone --recursive https://github.com/tensorflow/tensorflow.git tensorflow_src
           cd tensorflow_src
@@ -80,29 +96,28 @@ jobs:
           git submodule update --init --recursive
           touch unused
 
-          # 首先修复 xla 中的 python_configure.bzl 问题
+          # 修复 xla 中的 python_configure.bzl（将 HERMETIC_PYTHON_VERSION 替换为硬编码字符串）
           if [ -f xla/third_party/py/python_configure.bzl ]; then
             sed -i 's/HERMETIC_PYTHON_VERSION/"3.12"/g' xla/third_party/py/python_configure.bzl
           fi
 
-          # 删除所有对 python_version_repo 的引用
+          # 彻底删除所有对 python_version_repo 的引用
           find . -type f -exec sed -i '/python_version_repo/d' {} \;
           # 删除所有 load generate_api.bzl 的行
           find . -type f -exec sed -i '/load.*generate_api.bzl/d' {} \;
-          # 删除 python_init_ 相关行
+          # 删除所有 python_init_ 相关行
           find . -type f -exec sed -i '/python_init_/d' {} \;
 
-          # 应用其他必要修补
+          # 设置 NDK 版本为 27
           sed -i 's/ndk_version =.*/    ndk_version = 27/' third_party/android/android_configure.bzl
+
+          # 修复 repo.bzl 中的路径问题（vendored 错误）
           sed -i '/ctx.symlink(ctx.path(ctx.attr._root).dirname.get_child(ctx.attr.path), ".")/c\
               # Patched to handle paths with slashes\n    path_parts = ctx.attr.path.split('\''/'\'')\n    p = ctx.path(ctx.attr._root).dirname\n    for part in path_parts:\n        p = p.get_child(part)\n    ctx.symlink(p, ".")' third_party/repo.bzl
+
           cd ..
 
-      - name: Patch tflite-support files
-        run: |
-          sed -i 's|//third_party/bazel_rules/rules_java/java:defs.bzl|@rules_java//java:defs.bzl|' tensorflow_lite_support/java/BUILD
-          sed -i 's/\.to_list()//g' third_party/repo.bzl
-
+      # 创建 Android 平台定义（符合 Bazel 7.0+ 规范）
       - name: Create platform definitions
         run: |
           mkdir -p platform
@@ -137,29 +152,16 @@ jobs:
           )
           EOF
 
-      - name: Configure TensorFlow (skip python config)
-        run: |
-          cd tensorflow_src
-          export TF_NEED_ANDROID=1
-          export TF_SET_ANDROID_WORKSPACE=1
-          export PYTHON_BIN_PATH=/usr/bin/python3
-          export PYTHON_LIB_PATH=$(python3 -c 'import site; print(site.getsitepackages()[0])')
-          export TF_NEED_CLANG=0
-          export TF_NEED_CUDA=0
-          export TF_NEED_ROCM=0
-          export TF_NEED_TENSORRT=0
-          export TF_DOWNLOAD_CLANG=0
-          yes '' | python3 configure.py
-          cd ..
-
-      - name: Build AAR
+      # 构建 AAR（禁用 Bzlmod 以避免潜在冲突）
+      - name: Build TFLite Support AAR
         run: |
           bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
             --android_platforms=//platform:android_arm64_v8a,//platform:android_armeabi_v7a,//platform:android_x86,//platform:android_x86_64 \
             --override_repository=org_tensorflow=$(pwd)/tensorflow_src \
             --curses=no \
             --show_timestamps \
-            --verbose_failures
+            --verbose_failures \
+            --noenable_bzlmod
 
       - name: Locate AAR file
         id: locate-aar
