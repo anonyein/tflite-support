@@ -1,4 +1,4 @@
-name: Build TFLite Support Android AAR (Final with fetch)
+name: Build TFLite Support Android AAR (使用LiteRT旧标志)
 
 on:
   push:
@@ -22,6 +22,8 @@ jobs:
       RELEASE_VERSION: "0.0.0-nightly-SNAPSHOT"
       ANDROID_API_LEVEL: "21"
       NDK_VERSION: "r27"
+      # 沿用LiteRT的BAZEL_CONFIG_FLAGS
+      BAZEL_CONFIG_FLAGS: "--incompatible_enable_android_toolchain_resolution=false --linkopt=-Wl,--undefined-version --linkopt=-Wl,--allow-multiple-definition --copt=-D__ANDROID__ --copt=-UINTEL_MKL"
 
     steps:
       - name: Checkout repository
@@ -118,46 +120,17 @@ jobs:
           grep -r "HERMETIC_PYTHON_VERSION" . || echo "All occurrences replaced"
           cd ..
 
-      # 创建 Android 平台定义
-      - name: Create platform definitions
-        run: |
-          mkdir -p platform
-          cat > platform/BUILD <<'EOF'
-          platform(
-              name = "android_arm64_v8a",
-              constraint_values = [
-                  "@platforms//os:android",
-                  "@platforms//cpu:arm64",
-              ],
-          )
-          platform(
-              name = "android_armeabi_v7a",
-              constraint_values = [
-                  "@platforms//os:android",
-                  "@platforms//cpu:armv7",
-              ],
-          )
-          platform(
-              name = "android_x86",
-              constraint_values = [
-                  "@platforms//os:android",
-                  "@platforms//cpu:x86_32",
-              ],
-          )
-          platform(
-              name = "android_x86_64",
-              constraint_values = [
-                  "@platforms//os:android",
-                  "@platforms//cpu:x86_64",
-              ],
-          )
-          EOF
-
-      # 先尝试拉取所有依赖，确保外部仓库（如 googletest）被下载
+      # 先尝试拉取所有依赖，确保外部仓库被下载
       - name: Fetch external dependencies
         run: |
           bazel fetch //tensorflow_lite_support/java:tensorflow-lite-support \
-            --android_platforms=//platform:android_arm64_v8a,//platform:android_armeabi_v7a,//platform:android_x86,//platform:android_x86_64 \
+            --crosstool_top=//external:android/crosstool \
+            --host_crosstool_top=@bazel_tools//tools/cpp:toolchain \
+            --fat_apk_cpu=arm64-v8a,armeabi-v7a,x86,x86_64 \
+            --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
+            --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
+            --repo_env=TF_PYTHON_VERSION=3.12 \
+            ${{ env.BAZEL_CONFIG_FLAGS }} \
             --override_repository=org_tensorflow=$(pwd)/tensorflow_src \
             --curses=no \
             --verbose_failures
@@ -166,7 +139,13 @@ jobs:
       - name: Build TFLite Support AAR
         run: |
           bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
-            --android_platforms=//platform:android_arm64_v8a,//platform:android_armeabi_v7a,//platform:android_x86,//platform:android_x86_64 \
+            --crosstool_top=//external:android/crosstool \
+            --host_crosstool_top=@bazel_tools//tools/cpp:toolchain \
+            --fat_apk_cpu=arm64-v8a,armeabi-v7a,x86,x86_64 \
+            --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
+            --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
+            --repo_env=TF_PYTHON_VERSION=3.12 \
+            ${{ env.BAZEL_CONFIG_FLAGS }} \
             --override_repository=org_tensorflow=$(pwd)/tensorflow_src \
             --curses=no \
             --show_timestamps \
