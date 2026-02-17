@@ -1,4 +1,4 @@
-name: Build TFLite Support AAR using Docker (Final)
+name: Build TFLite Support AAR (Final Attempt)
 
 on:
   push:
@@ -26,153 +26,122 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      # 创建 Dockerfile 用于构建包含 Android SDK 和 NDK 的镜像
-      - name: Create Dockerfile
-        run: |
-          cat > Dockerfile.android <<'EOF'
-          FROM tensorflow/tensorflow:devel
-
-          # Install required packages, including OpenJDK 8 (for sdkmanager compatibility)
-          RUN apt-get update && apt-get install -y openjdk-8-jdk wget unzip && \
-              apt-get clean && rm -rf /var/lib/apt/lists/*
-
-          # Set JAVA_HOME to Java 8
-          ENV JAVA_HOME /usr/lib/jvm/java-8-openjdk-amd64
-
-          # Install Android SDK tools (older version that works with Java 8)
-          ENV ANDROID_SDK_VERSION 4333796
-          ENV ANDROID_HOME /opt/android/sdk
-          RUN mkdir -p ${ANDROID_HOME} && \
-              wget -q https://dl.google.com/android/repository/sdk-tools-linux-${ANDROID_SDK_VERSION}.zip && \
-              unzip -q sdk-tools-linux-${ANDROID_SDK_VERSION}.zip -d ${ANDROID_HOME} && \
-              rm sdk-tools-linux-${ANDROID_SDK_VERSION}.zip
-
-          ENV PATH ${PATH}:${ANDROID_HOME}/tools:${ANDROID_HOME}/tools/bin:${ANDROID_HOME}/platform-tools
-
-          # Install Android NDK r23c into a numeric directory (avoid "r23c" in path)
-          ENV ANDROID_NDK_VERSION r23c
-          RUN wget -q https://dl.google.com/android/repository/android-ndk-${ANDROID_NDK_VERSION}-linux.zip && \
-              unzip -q android-ndk-${ANDROID_NDK_VERSION}-linux.zip -d /opt && \
-              mv /opt/android-ndk-${ANDROID_NDK_VERSION} /opt/android-ndk-23 && \
-              rm android-ndk-${ANDROID_NDK_VERSION}-linux.zip
-
-          ENV ANDROID_NDK_HOME /opt/android-ndk-23
-          ENV PATH ${PATH}:${ANDROID_NDK_HOME}
-
-          # Create source.properties file for NDK (correct numeric version for r23c)
-          RUN echo "Pkg.Revision = 23.2.8568313" > ${ANDROID_NDK_HOME}/source.properties && \
-              echo "Pkg.Desc = Android NDK" >> ${ANDROID_NDK_HOME}/source.properties
-
-          # Set Android API level (as integer) and build tools version
-          ENV ANDROID_API_LEVEL 21
-          ENV ANDROID_NDK_API_LEVEL 23
-          ENV ANDROID_BUILD_TOOLS_VERSION 30.0.3
-          EOF
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image with Android SDK
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: Dockerfile.android
-          push: false
-          load: true
-          tags: tflite-builder:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # 克隆 TensorFlow 源码（需要修补 android_configure.bzl 和创建 unused 文件）
-      - name: Clone TensorFlow source
-        run: |
-          git clone https://github.com/tensorflow/tensorflow.git tensorflow_src
-          cd tensorflow_src
-          git checkout 777924f5575e7e6e22e4f47be211c2a94f59c4f5
-          # 创建 unused 文件（解决 vendoring 错误）
-          touch unused
-          cd ..
-
-      # 修补 android_configure.bzl，强制使用数字 NDK 版本 23
-      - name: Patch android_configure.bzl
-        run: |
-          sed -i '71s/.*/    ndk_version = 23/' tensorflow_src/third_party/android/android_configure.bzl
-          grep -n "ndk_version =" tensorflow_src/third_party/android/android_configure.bzl
-
-      # 在容器内运行构建
-      - name: Run build inside container
+      # 使用官方 TensorFlow devel 镜像（包含所有构建工具）
+      - name: Run build in official devel container
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
-            -v ${{ github.workspace }}/tensorflow_src:/tensorflow_src \
             -w /workspace \
-            tflite-builder:latest \
+            tensorflow/tensorflow:devel \
             bash -c "
-              # 接受 Android SDK 许可证
+              set -ex
+
+              # 安装额外依赖（Java 8 用于 sdkmanager，wget 和 unzip）
+              apt-get update && apt-get install -y openjdk-8-jdk wget unzip
+
+              # 设置 Java 环境
+              export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+              export PATH=\$JAVA_HOME/bin:\$PATH
+
+              # 下载并安装 Android SDK 工具（旧版，兼容 Java 8）
+              mkdir -p /opt/android/sdk
+              cd /opt/android/sdk
+              wget -q https://dl.google.com/android/repository/sdk-tools-linux-4333796.zip
+              unzip -q sdk-tools-linux-4333796.zip
+              rm sdk-tools-linux-4333796.zip
+              export ANDROID_HOME=/opt/android/sdk
+              export PATH=\$ANDROID_HOME/tools:\$ANDROID_HOME/tools/bin:\$ANDROID_HOME/platform-tools:\$PATH
+
+              # 接受许可证并安装 platform 和 build-tools
               yes | sdkmanager --licenses || true
               sdkmanager \"platforms;android-21\" \"build-tools;30.0.3\"
+
+              # 下载并安装 NDK r23c（重命名为纯数字目录）
+              cd /opt
+              wget -q https://dl.google.com/android/repository/android-ndk-r23c-linux.zip
+              unzip -q android-ndk-r23c-linux.zip
+              mv android-ndk-r23c android-ndk-23
+              rm android-ndk-r23c-linux.zip
+              export ANDROID_NDK_HOME=/opt/android-ndk-23
+              export PATH=\$ANDROID_NDK_HOME:\$PATH
+
+              # 创建 NDK 的 source.properties（确保数字版本）
+              echo \"Pkg.Revision = 23.2.8568313\" > \$ANDROID_NDK_HOME/source.properties
+              echo \"Pkg.Desc = Android NDK\" >> \$ANDROID_NDK_HOME/source.properties
+
+              # 设置 Android 环境变量（供 bazel 使用）
+              export ANDROID_API_LEVEL=21
+              export ANDROID_NDK_API_LEVEL=23
+              export ANDROID_BUILD_TOOLS_VERSION=30.0.3
+              export ANDROID_SDK_API_LEVEL=21
+
+              # 返回工作区
+              cd /workspace
+
+              # 克隆 TensorFlow 并修补 android_configure.bzl
+              git clone https://github.com/tensorflow/tensorflow.git tensorflow_src
+              cd tensorflow_src
+              git checkout 777924f5575e7e6e22e4f47be211c2a94f59c4f5
+              # 创建 unused 文件（解决 vendoring 错误）
+              touch unused
+              # 修补 android_configure.bzl（强制 NDK 版本为 23）
+              sed -i '71s/.*/    ndk_version = 23/' third_party/android/android_configure.bzl
+              cd ..
+
+              # 修补 tflite-support 的 BUILD 文件
+              sed -i 's|//third_party/bazel_rules/rules_java/java:defs.bzl|@rules_java//java:defs.bzl|' tensorflow_lite_support/java/BUILD
+
+              # 修补 third_party/repo.bzl
+              sed -i 's/\.to_list()//g' third_party/repo.bzl
+
+              # 创建 Android 平台定义
+              mkdir -p platform
+              cat > platform/BUILD <<'PLATFORM_EOF'
+              platform(
+                  name = \"android_arm64_v8a\",
+                  constraint_values = [
+                      \"@platforms//os:android\",
+                      \"@platforms//cpu:arm64\",
+                  ],
+              )
+              platform(
+                  name = \"android_armeabi_v7a\",
+                  constraint_values = [
+                      \"@platforms//os:android\",
+                      \"@platforms//cpu:armv7\",
+                  ],
+              )
+              platform(
+                  name = \"android_x86\",
+                  constraint_values = [
+                      \"@platforms//os:android\",
+                      \"@platforms//cpu:x86_32\",
+                  ],
+              )
+              platform(
+                  name = \"android_x86_64\",
+                  constraint_values = [
+                      \"@platforms//os:android\",
+                      \"@platforms//cpu:x86_64\",
+                  ],
+              )
+              PLATFORM_EOF
 
               # 计算 Python 库路径
               PYTHON_LIB_PATH=\$(python3 -c 'import site; print(site.getsitepackages()[0])')
 
-              # 如果存在 configure.py 则运行
-              if [ -f configure.py ]; then
-                export TF_NEED_ANDROID=1
-                export TF_SET_ANDROID_WORKSPACE=1
-                yes '' | python3 configure.py
-              fi
-
-              # 创建 Android 平台定义
-              mkdir -p platform
-              printf '%s\n' \\
-                'platform(' \\
-                '    name = \"android_arm64_v8a\",' \\
-                '    constraint_values = [' \\
-                '        \"@platforms//os:android\",' \\
-                '        \"@platforms//cpu:arm64\",' \\
-                '    ],' \\
-                ')' \\
-                'platform(' \\
-                '    name = \"android_armeabi_v7a\",' \\
-                '    constraint_values = [' \\
-                '        \"@platforms//os:android\",' \\
-                '        \"@platforms//cpu:armv7\",' \\
-                '    ],' \\
-                ')' \\
-                'platform(' \\
-                '    name = \"android_x86\",' \\
-                '    constraint_values = [' \\
-                '        \"@platforms//os:android\",' \\
-                '        \"@platforms//cpu:x86_32\",' \\
-                '    ],' \\
-                ')' \\
-                'platform(' \\
-                '    name = \"android_x86_64\",' \\
-                '    constraint_values = [' \\
-                '        \"@platforms//os:android\",' \\
-                '        \"@platforms//cpu:x86_64\",' \\
-                '    ],' \\
-                ')' > platform/BUILD
-
-              # 同步外部依赖，确保覆盖生效
-              bazel sync --configure \
-                --override_repository=org_tensorflow=/tensorflow_src \
-                --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
-                --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
-                --repo_env=PYTHON_LIB_PATH=\$PYTHON_LIB_PATH \
-                --repo_env=TF_PYTHON_VERSION=3.12
-
-              # 执行 Bazel 构建
+              # 执行构建（禁用 Bzlmod，使用覆盖）
               bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
                 --android_platforms=//platform:android_arm64_v8a,//platform:android_armeabi_v7a,//platform:android_x86,//platform:android_x86_64 \
                 --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
                 --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
                 --repo_env=PYTHON_LIB_PATH=\$PYTHON_LIB_PATH \
                 --repo_env=TF_PYTHON_VERSION=3.12 \
-                --override_repository=org_tensorflow=/tensorflow_src \
+                --override_repository=org_tensorflow=/workspace/tensorflow_src \
                 --curses=no \
                 --show_timestamps \
-                --verbose_failures
+                --verbose_failures \
+                --noenable_bzlmod
             "
 
       # 定位生成的 AAR 文件
