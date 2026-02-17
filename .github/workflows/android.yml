@@ -1,4 +1,4 @@
-name: Build TFLite Support AAR (模仿LiteRT脚本，使用Bazel 5.1.1)
+name: Build TFLite Support AAR (模仿LiteRT脚本，修补googletest)
 
 on:
   push:
@@ -74,16 +74,19 @@ jobs:
           ls -la $ANDROID_HOME/platforms || true
           ls -la $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang* || true
 
+      # 修补 tflite-support BUILD 文件
       - name: Patch tflite-support BUILD file
         run: |
           sed -i 's|//third_party/bazel_rules/rules_java/java:defs.bzl|@rules_java//java:defs.bzl|' tensorflow_lite_support/java/BUILD
           echo "Patched BUILD file"
 
+      # 修补 tflite-support 的 third_party/repo.bzl
       - name: Patch third_party/repo.bzl
         run: |
           sed -i 's/\.to_list()//g' third_party/repo.bzl
           echo "Patched third_party/repo.bzl"
 
+      # 克隆 TensorFlow 源码并应用所有必要修补
       - name: Clone and patch TensorFlow
         run: |
           git clone --recursive https://github.com/tensorflow/tensorflow.git tensorflow_src
@@ -92,15 +95,24 @@ jobs:
           git submodule update --init --recursive
           touch unused
 
+          # 替换 HERMETIC_PYTHON_VERSION
           find . -type f -name "*.bzl" -exec sed -i 's/HERMETIC_PYTHON_VERSION/"3.12"/g' {} \;
+          # 删除 python_version_repo 引用
           find . -type f -exec sed -i '/python_version_repo/d' {} \;
+          # 删除 generate_api.bzl 加载
           find . -type f -exec sed -i '/load.*generate_api.bzl/d' {} \;
+          # 删除 python_init_ 相关行
           find . -type f -exec sed -i '/python_init_/d' {} \;
 
+          # 强制 NDK 版本为 27
           sed -i '/ndk_version =/c\    # ndk_version = 0  # commented out\n    ndk_version = 27' third_party/android/android_configure.bzl
 
+          # 修复 vendored 路径问题
           sed -i '/ctx.symlink(ctx.path(ctx.attr._root).dirname.get_child(ctx.attr.path), ".")/c\
               # Patched to handle paths with slashes\n    path_parts = ctx.attr.path.split('\''/'\'')\n    p = ctx.path(ctx.attr._root).dirname\n    for part in path_parts:\n        p = p.get_child(part)\n    ctx.symlink(p, ".")' third_party/repo.bzl
+
+          # 注释掉 grpc_extra_deps.bzl 中导致 googletest 缺失的行
+          find . -path "*/grpc_extra_deps.bzl" -exec sed -i '/googletest_deps.bzl/s/^/# /' {} \;
 
           cd ..
 
