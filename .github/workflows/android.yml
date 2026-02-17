@@ -78,20 +78,39 @@ jobs:
               # 返回工作区
               cd /workspace
 
-              # 克隆 TensorFlow 并修补 android_configure.bzl
-              git clone https://github.com/tensorflow/tensorflow.git tensorflow_src
+              # 克隆 TensorFlow（包含子模块）并修补
+              git clone --recursive https://github.com/tensorflow/tensorflow.git tensorflow_src
               cd tensorflow_src
               git checkout 777924f5575e7e6e22e4f47be211c2a94f59c4f5
+              git submodule update --init --recursive
               # 创建 unused 文件（解决 vendoring 错误）
               touch unused
               # 修补 android_configure.bzl（强制 NDK 版本为 23）
               sed -i '71s/.*/    ndk_version = 23/' third_party/android/android_configure.bzl
+              # 修补 repo.bzl 中的 vendored 路径问题
+              python3 <<'PY_EOF'
+              import re
+              with open(\"third_party/repo.bzl\", \"r\") as f:
+                  content = f.read()
+              pattern = r'(ctx\\.symlink\\(ctx\\.path\\(ctx\\.attr\\._root\\)\\.dirname\\.get_child\\(ctx\\.attr\\.path\\), *\"\\.\"\\))'
+              replacement = '''
+                  # Patched to handle paths with slashes
+                  path_parts = ctx.attr.path.split('/')
+                  p = ctx.path(ctx.attr._root).dirname
+                  for part in path_parts:
+                      p = p.get_child(part)
+                  ctx.symlink(p, ".")
+              '''
+              new_content = re.sub(pattern, replacement, content, flags=re.DOTALL)
+              with open(\"third_party/repo.bzl\", \"w\") as f:
+                  f.write(new_content)
+              PY_EOF
               cd ..
 
               # 修补 tflite-support 的 BUILD 文件
               sed -i 's|//third_party/bazel_rules/rules_java/java:defs.bzl|@rules_java//java:defs.bzl|' tensorflow_lite_support/java/BUILD
 
-              # 修补 third_party/repo.bzl
+              # 修补 third_party/repo.bzl（tflite-support 自己的）
               sed -i 's/\.to_list()//g' third_party/repo.bzl
 
               # 创建 Android 平台定义（使用 printf 避免 heredoc 问题）
