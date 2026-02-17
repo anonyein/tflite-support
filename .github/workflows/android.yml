@@ -1,0 +1,30 @@
+name: Android CI
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+# 示例：release_android.yml 的关键步骤
+jobs:
+  build_android_aar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: '11'
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v2
+      - name: Build AAR with Bazel
+        run: |
+          bazel build //tensorflow_lite_support/java:tflite_support_java \
+            --action_env=ANDROID_HOME=$ANDROID_HOME \
+            --action_env=ANDROID_NDK_HOME=$ANDROID_NDK_HOME
+      - name: Upload AAR artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: tflite-support-aar
+          path: bazel-bin/tensorflow_lite_support/java/*.aar
