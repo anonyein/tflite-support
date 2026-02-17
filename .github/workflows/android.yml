@@ -122,16 +122,17 @@ jobs:
         run: |
           echo "lib_path=$(python3 -c 'import site; print(site.getsitepackages()[0])')" >> "$GITHUB_OUTPUT"
 
-      # 同步外部依赖，确保 Hermetic Python 仓库被正确创建
-      - name: Sync external dependencies with overrides
+      # 先拉取所有依赖，确保 Python 工具链正确初始化
+      - name: Fetch external dependencies with overrides
         run: |
-          bazel sync --configure \
+          bazel fetch //tensorflow_lite_support/java:tensorflow-lite-support \
             --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
             --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
             --repo_env=PYTHON_LIB_PATH=${{ steps.python.outputs.lib_path }} \
             --repo_env=TF_PYTHON_VERSION=3.12 \
             --override_repository=flatbuffers=$(pwd)/flatbuffers_src \
-            --noenable_bzlmod || true   # 允许失败，但尽力同步
+            --curses=no \
+            --noenable_bzlmod
 
       # 正式构建
       - name: Build TFLite Support AAR
