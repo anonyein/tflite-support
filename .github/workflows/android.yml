@@ -1,4 +1,4 @@
-name: Build TFLite Support AAR (模仿LiteRT脚本，彻底修补googletest)
+name: Build TFLite Support AAR (彻底修补googletest+预拉取)
 
 on:
   push:
@@ -111,17 +111,60 @@ jobs:
           sed -i '/ctx.symlink(ctx.path(ctx.attr._root).dirname.get_child(ctx.attr.path), ".")/c\
               # Patched to handle paths with slashes\n    path_parts = ctx.attr.path.split('\''/'\'')\n    p = ctx.path(ctx.attr._root).dirname\n    for part in path_parts:\n        p = p.get_child(part)\n    ctx.symlink(p, ".")' third_party/repo.bzl
 
-          # 注释掉 grpc_extra_deps.bzl 中导致 googletest 缺失的行（精确查找并注释）
-          GRPC_EXTRA_DEPS=$(find . -type f -name "grpc_extra_deps.bzl" 2>/dev/null | head -1)
-          if [ -n "$GRPC_EXTRA_DEPS" ]; then
-            echo "Patching $GRPC_EXTRA_DEPS"
-            sed -i '/googletest_deps.bzl/s/^/# /' "$GRPC_EXTRA_DEPS"
-            grep -n "googletest_deps.bzl" "$GRPC_EXTRA_DEPS" && echo "Warning: line still present" || echo "Line commented successfully"
-          else
-            echo "grpc_extra_deps.bzl not found"
-          fi
+          # 彻底删除所有 googletest_deps.bzl 加载行
+          echo "Before patching googletest_deps.bzl:"
+          grep -r "googletest_deps.bzl" . || echo "None found"
+          find . -type f -name "*.bzl" -exec sed -i '/googletest_deps.bzl/d' {} \;
+          find . -type f -name "*.bzl" -exec sed -i '/load.*googletest_deps.bzl/d' {} \;
+          find . -type f -name "*.bzl" -exec sed -i '/googletest_deps.bzl/s/.*/# removed/' {} \;  # 保险
+          echo "After patching:"
+          grep -r "googletest_deps.bzl" . || echo "All occurrences removed"
 
           cd ..
+
+      # 创建 Android 平台定义（虽然 Bazel 5 可能不需要，但保留无害）
+      - name: Create platform definitions
+        run: |
+          mkdir -p platform
+          cat > platform/BUILD <<'EOF'
+          platform(
+              name = "android_arm64_v8a",
+              constraint_values = [
+                  "@platforms//os:android",
+                  "@platforms//cpu:arm64",
+              ],
+          )
+          platform(
+              name = "android_armeabi_v7a",
+              constraint_values = [
+                  "@platforms//os:android",
+                  "@platforms//cpu:armv7",
+              ],
+          )
+          platform(
+              name = "android_x86",
+              constraint_values = [
+                  "@platforms//os:android",
+                  "@platforms//cpu:x86_32",
+              ],
+          )
+          platform(
+              name = "android_x86_64",
+              constraint_values = [
+                  "@platforms//os:android",
+                  "@platforms//cpu:x86_64",
+              ],
+          )
+          EOF
+
+      # 预拉取依赖并应用覆盖
+      - name: Fetch dependencies with override
+        run: |
+          bazel fetch //tensorflow_lite_support/java:tensorflow-lite-support \
+            --config=android_arm64 \
+            --fat_apk_cpu=arm64-v8a,armeabi-v7a,x86,x86_64 \
+            --override_repository=org_tensorflow=$(pwd)/tensorflow_src \
+            --curses=no
 
       - name: Build TFLite Support AAR
         run: |
