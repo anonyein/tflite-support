@@ -1,4 +1,4 @@
-name: Build TFLite Support Android AAR (Final with Patched TensorFlow)
+name: Build TFLite Support Android AAR (Final with Fetch)
 
 on:
   push:
@@ -152,6 +152,20 @@ jobs:
         run: |
           echo "lib_path=$(python3 -c 'import site; print(site.getsitepackages()[0])')" >> "$GITHUB_OUTPUT"
 
+      # 先拉取所有依赖，确保 Hermetic Python 仓库被正确初始化
+      - name: Fetch external dependencies
+        run: |
+          bazel fetch //tensorflow_lite_support/java:tensorflow-lite-support \
+            --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
+            --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
+            --repo_env=PYTHON_LIB_PATH=${{ steps.python.outputs.lib_path }} \
+            --repo_env=TF_PYTHON_VERSION=3.12 \
+            --repo_env=USE_PYWRAP_RULES=True \
+            --override_repository=flatbuffers=$(pwd)/flatbuffers_src \
+            --override_repository=org_tensorflow=$(pwd)/tensorflow_src \
+            --curses=no \
+            --noenable_bzlmod
+
       - name: Build TFLite Support AAR
         run: |
           bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
@@ -160,6 +174,7 @@ jobs:
             --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
             --repo_env=PYTHON_LIB_PATH=${{ steps.python.outputs.lib_path }} \
             --repo_env=TF_PYTHON_VERSION=3.12 \
+            --repo_env=USE_PYWRAP_RULES=True \
             --override_repository=flatbuffers=$(pwd)/flatbuffers_src \
             --override_repository=org_tensorflow=$(pwd)/tensorflow_src \
             --curses=no \
