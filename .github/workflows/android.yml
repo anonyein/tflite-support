@@ -1,4 +1,4 @@
-name: Build TFLite Support AAR using Official Docker Image
+name: Build TFLite Support AAR using Docker
 
 on:
   push:
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   build-aar:
-    name: "Build TFLite Support AAR in Docker"
+    name: "Build TFLite Support AAR"
     runs-on: ubuntu-latest
 
     steps:
@@ -26,34 +26,75 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      # 使用官方 TensorFlow Android 开发镜像
-      - name: Run build inside official android devel container
+      # 创建 Dockerfile 用于构建包含 Android SDK 的镜像
+      - name: Create Dockerfile
+        run: |
+          cat > Dockerfile.android <<'EOF'
+          FROM tensorflow/tensorflow:devel
+
+          # Install required packages
+          RUN apt-get update && apt-get install -y openjdk-17-jdk wget unzip && \
+              apt-get clean && rm -rf /var/lib/apt/lists/*
+
+          # Install Android SDK
+          ENV ANDROID_SDK_VERSION 4333796
+          ENV ANDROID_HOME /opt/android/sdk
+          RUN mkdir -p ${ANDROID_HOME} && \
+              wget -q https://dl.google.com/android/repository/sdk-tools-linux-${ANDROID_SDK_VERSION}.zip && \
+              unzip -q sdk-tools-linux-${ANDROID_SDK_VERSION}.zip -d ${ANDROID_HOME} && \
+              rm sdk-tools-linux-${ANDROID_SDK_VERSION}.zip
+
+          ENV PATH ${PATH}:${ANDROID_HOME}/tools:${ANDROID_HOME}/tools/bin:${ANDROID_HOME}/platform-tools
+
+          # Install Android NDK
+          ENV ANDROID_NDK_VERSION r25c
+          RUN wget -q https://dl.google.com/android/repository/android-ndk-${ANDROID_NDK_VERSION}-linux.zip && \
+              unzip -q android-ndk-${ANDROID_NDK_VERSION}-linux.zip -d /opt && \
+              rm android-ndk-${ANDROID_NDK_VERSION}-linux.zip
+          ENV ANDROID_NDK_HOME /opt/android-ndk-${ANDROID_NDK_VERSION}
+          ENV PATH ${PATH}:${ANDROID_NDK_HOME}
+
+          # Set environment variables for Bazel
+          ENV ANDROID_API_LEVEL 21
+          ENV ANDROID_BUILD_TOOLS_VERSION 30.0.3
+          EOF
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image with Android SDK
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.android
+          push: false
+          load: true
+          tags: tflite-builder:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 在容器内运行构建
+      - name: Run build inside container
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
             -w /workspace \
-            tensorflow/tensorflow:devel-android \
+            tflite-builder:latest \
             bash -c "
-              # 设置 Android 环境变量（镜像中已安装 SDK/NDK）
-              export ANDROID_HOME=/opt/android/sdk
-              export ANDROID_SDK_HOME=/opt/android/sdk
-              export ANDROID_NDK_HOME=/opt/android/sdk/ndk-bundle
-              export ANDROID_API_LEVEL=21
-              export ANDROID_BUILD_TOOLS_VERSION=30.0.3
-
-              # 接受 Android SDK 许可证
+              # 接受 Android SDK 许可证（非交互式）
               yes | sdkmanager --licenses > /dev/null 2>&1 || true
+              sdkmanager \"platforms;android-21\" \"build-tools;30.0.3\" > /dev/null 2>&1
 
-              # 配置 TensorFlow（如果需要）
+              # 如果存在 configure.py 则运行
               if [ -f configure.py ]; then
                 export TF_NEED_ANDROID=1
                 export TF_SET_ANDROID_WORKSPACE=1
                 yes '' | python3 configure.py
               fi
 
-              # 创建 Android 平台定义（如果不存在）
+              # 创建 Android 平台定义
               mkdir -p platform
-              cat > platform/BUILD <<'EOF'
+              cat > platform/BUILD <<'PLATFORM_EOF'
               platform(
                   name = \"android_arm64_v8a\",
                   constraint_values = [
@@ -82,12 +123,12 @@ jobs:
                       \"@platforms//cpu:x86_64\",
                   ],
               )
-              EOF
+              PLATFORM_EOF
 
               # 计算 Python 库路径
               PYTHON_LIB_PATH=\$(python3 -c 'import site; print(site.getsitepackages()[0])')
 
-              # 构建 AAR
+              # 执行 Bazel 构建
               bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
                 --android_platforms=//platform:android_arm64_v8a,//platform:android_armeabi_v7a,//platform:android_x86,//platform:android_x86_64 \
                 --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
