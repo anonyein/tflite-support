@@ -58,39 +58,19 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bazel-
 
-      # 修复 BUILD 文件中错误的 load 路径（基于之前经验）
+      # 修复 BUILD 文件中错误的 load 路径
       - name: Patch BUILD file to use correct rules_java load path
         run: |
           sed -i 's|//third_party/bazel_rules/rules_java/java:defs.bzl|@rules_java//java:defs.bzl|' tensorflow_lite_support/java/BUILD
           echo "Patched BUILD file:"
           grep -n "rules_java" tensorflow_lite_support/java/BUILD || true
 
-      # 关键：参考 .bazelrc 配置，正确初始化 Python 工具链
-      - name: Configure TensorFlow for Python
-        run: |
-          if [ -f ./configure.py ]; then
-            export HERMETIC_PYTHON_VERSION=3.12
-            export PYTHON_BIN_PATH=$(which python3)
-            export PYTHON_LIB_PATH=$($PYTHON_BIN_PATH -c "import site; print(site.getsitepackages()[0])")
-            # 明确禁用不需要的选项，避免配置脚本询问
-            export TF_NEED_CUDA=0
-            export TF_NEED_ROCM=0
-            export TF_NEED_CLANG=0
-            export TF_NEED_OPENCL_SYCL=0
-            export TF_NEED_TENSORRT=0
-            export TF_SET_ANDROID_WORKSPACE=1  # 需要 Android 工作区
-            export TF_DOWNLOAD_CLANG=0
-            export TF_ENABLE_XLA=0
-            # 使用 'yes' 自动接受所有默认值
-            yes "" | python3 ./configure.py
-          else
-            echo "No configure.py found, skipping"
-          fi
-
-      # 关键：显式使用 Android 配置进行构建，匹配 .bazelrc 中的定义
+      # 不再运行 configure.py，而是通过 --repo_env 传递 Python 配置
       - name: Build TFLite Support AAR
         run: |
           bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
+            --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
+            --repo_env=PYTHON_BIN_PATH=$(which python3) \
             --curses=no \
             --show_timestamps \
             --verbose_failures
