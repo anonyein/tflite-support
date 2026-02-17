@@ -1,4 +1,4 @@
-name: Build TFLite Support AAR (彻底修补googletest+预拉取)
+name: Build tflite-support Android AAR (终极方案)
 
 on:
   push:
@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-package:
-    name: "Build TFLite Support AAR"
+  build-aar:
+    name: "Build tflite-support AAR"
     runs-on: ubuntu-latest
     env:
       RELEASE_VERSION: "0.0.0-nightly-SNAPSHOT"
@@ -24,9 +24,10 @@ jobs:
       NDK_VERSION: "r27"
 
     steps:
-      - name: Checkout repository
+      - name: Checkout tflite-support repository
         uses: actions/checkout@v4
         with:
+          path: tflite-support
           fetch-depth: 0
           submodules: recursive
 
@@ -50,9 +51,7 @@ jobs:
         run: |
           wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip
           unzip -q android-ndk-${NDK_VERSION}-linux.zip -d /tmp
-          NDK_PATH=/tmp/android-ndk-${NDK_VERSION}
-          echo "ANDROID_NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
-          ls -la $NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/clang* || exit 1
+          echo "ANDROID_NDK_HOME=/tmp/android-ndk-${NDK_VERSION}" >> "$GITHUB_ENV"
         env:
           NDK_VERSION: ${{ env.NDK_VERSION }}
 
@@ -60,147 +59,85 @@ jobs:
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> "$GITHUB_ENV"
 
-      - name: Configure .bazelrc for NDK
+      - name: Create build script
         run: |
-          echo "build --action_env=ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> .bazelrc
+          cat > build.sh <<'EOF'
+          #!/bin/bash
+          set -ex
 
-      - name: Verify Android paths
-        run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_HOME=$ANDROID_SDK_HOME"
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
-          ls -la $ANDROID_HOME/platforms || true
-          ls -la $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang* || true
+          # 设置 Android 环境变量
+          export ANDROID_NDK_HOME=/tmp/android-ndk-r27
+          export ANDROID_HOME=$ANDROID_HOME
+          export ANDROID_SDK_HOME=$ANDROID_HOME
+          export ANDROID_API_LEVEL=21
+          export ANDROID_NDK_API_LEVEL=27
+          export ANDROID_BUILD_TOOLS_VERSION=30.0.3
+          export ANDROID_SDK_API_LEVEL=21
 
-      # 修补 tflite-support BUILD 文件
-      - name: Patch tflite-support BUILD file
-        run: |
+          cd tflite-support
+
+          # 修补 tflite-support 自身的 BUILD 文件 (load 路径错误)
           sed -i 's|//third_party/bazel_rules/rules_java/java:defs.bzl|@rules_java//java:defs.bzl|' tensorflow_lite_support/java/BUILD
-          echo "Patched BUILD file"
-
-      # 修补 tflite-support 的 third_party/repo.bzl
-      - name: Patch third_party/repo.bzl
-        run: |
+          # 修补 tflite-support 自身的 repo.bzl (to_list 错误)
           sed -i 's/\.to_list()//g' third_party/repo.bzl
-          echo "Patched third_party/repo.bzl"
 
-      # 克隆 TensorFlow 源码并应用所有必要修补
-      - name: Clone and patch TensorFlow
-        run: |
+          # 克隆 TensorFlow (tflite-support 依赖的版本)
           git clone --recursive https://github.com/tensorflow/tensorflow.git tensorflow_src
           cd tensorflow_src
+          # 切换到 tflite-support WORKSPACE 中指定的 commit
           git checkout 777924f5575e7e6e22e4f47be211c2a94f59c4f5
           git submodule update --init --recursive
+
+          # 创建 unused 文件，解决一些旧版 vendoring 问题
           touch unused
 
-          # 替换 HERMETIC_PYTHON_VERSION
-          find . -type f -name "*.bzl" -exec sed -i 's/HERMETIC_PYTHON_VERSION/"3.12"/g' {} \;
-          # 删除 python_version_repo 引用
-          find . -type f -exec sed -i '/python_version_repo/d' {} \;
-          # 删除 generate_api.bzl 加载
-          find . -type f -exec sed -i '/load.*generate_api.bzl/d' {} \;
-          # 删除 python_init_ 相关行
-          find . -type f -exec sed -i '/python_init_/d' {} \;
+          # --- 核心修复: 在 TensorFlow WORKSPACE 中彻底禁用 Hermetic Python ---
+          # 注释掉所有 python_init_* 相关的行
+          sed -i '/python_init_rules/ s/^/# /' WORKSPACE
+          sed -i '/python_init_repositories/ s/^/# /' WORKSPACE
+          sed -i '/python_init_toolchains/ s/^/# /' WORKSPACE
+          sed -i '/python_init_pip/ s/^/# /' WORKSPACE
+          sed -i '/install_deps/ s/^/# /' WORKSPACE
+          # 注释掉可能加载 python_version_repo 的其他行
+          sed -i '/python_version_repo/ s/^/# /' tensorflow/workspace3.bzl 2>/dev/null || true
+          sed -i '/python_version_repo/ s/^/# /' tensorflow/workspace.bzl 2>/dev/null || true
 
-          # 强制 NDK 版本为 27
-          sed -i '/ndk_version =/c\    # ndk_version = 0  # commented out\n    ndk_version = 27' third_party/android/android_configure.bzl
+          # 确保 NDK 版本正确 (可选，但保留无害)
+          sed -i 's/ndk_version =.*/    ndk_version = 27/' third_party/android/android_configure.bzl
 
-          # 修复 vendored 路径问题
+          # 修复 repo.bzl 中的路径问题 (保留，以防万一)
           sed -i '/ctx.symlink(ctx.path(ctx.attr._root).dirname.get_child(ctx.attr.path), ".")/c\
               # Patched to handle paths with slashes\n    path_parts = ctx.attr.path.split('\''/'\'')\n    p = ctx.path(ctx.attr._root).dirname\n    for part in path_parts:\n        p = p.get_child(part)\n    ctx.symlink(p, ".")' third_party/repo.bzl
-
-          # 彻底删除所有 googletest_deps.bzl 加载行
-          echo "Before patching googletest_deps.bzl:"
-          grep -r "googletest_deps.bzl" . || echo "None found"
-          find . -type f -name "*.bzl" -exec sed -i '/googletest_deps.bzl/d' {} \;
-          find . -type f -name "*.bzl" -exec sed -i '/load.*googletest_deps.bzl/d' {} \;
-          find . -type f -name "*.bzl" -exec sed -i '/googletest_deps.bzl/s/.*/# removed/' {} \;  # 保险
-          echo "After patching:"
-          grep -r "googletest_deps.bzl" . || echo "All occurrences removed"
-
           cd ..
 
-      # 创建 Android 平台定义（虽然 Bazel 5 可能不需要，但保留无害）
-      - name: Create platform definitions
-        run: |
-          mkdir -p platform
-          cat > platform/BUILD <<'EOF'
-          platform(
-              name = "android_arm64_v8a",
-              constraint_values = [
-                  "@platforms//os:android",
-                  "@platforms//cpu:arm64",
-              ],
-          )
-          platform(
-              name = "android_armeabi_v7a",
-              constraint_values = [
-                  "@platforms//os:android",
-                  "@platforms//cpu:armv7",
-              ],
-          )
-          platform(
-              name = "android_x86",
-              constraint_values = [
-                  "@platforms//os:android",
-                  "@platforms//cpu:x86_32",
-              ],
-          )
-          platform(
-              name = "android_x86_64",
-              constraint_values = [
-                  "@platforms//os:android",
-                  "@platforms//cpu:x86_64",
-              ],
-          )
-          EOF
-
-      # 预拉取依赖并应用覆盖
-      - name: Fetch dependencies with override
-        run: |
-          bazel fetch //tensorflow_lite_support/java:tensorflow-lite-support \
+          # 构建最终的 AAR
+          bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
             --config=android_arm64 \
             --fat_apk_cpu=arm64-v8a,armeabi-v7a,x86,x86_64 \
+            --incompatible_enable_android_toolchain_resolution=false \
+            --linkopt=-Wl,--undefined-version \
+            --linkopt=-Wl,--allow-multiple-definition \
+            --copt=-D__ANDROID__ \
+            --copt=-UINTEL_MKL \
             --override_repository=org_tensorflow=$(pwd)/tensorflow_src \
-            --curses=no
-
-      - name: Build TFLite Support AAR
-        run: |
-          BUILD_FLAGS=(
-            "-c" "opt"
-            "--cxxopt=--std=c++17"
-            "--config=android_arm64"
-            "--fat_apk_cpu=arm64-v8a,armeabi-v7a,x86,x86_64"
-            "--define=android_dexmerger_tool=d8_dexmerger"
-            "--define=android_incremental_dexing_tool=d8_dexbuilder"
-            "--repo_env=HERMETIC_PYTHON_VERSION=3.12"
-            "--show_timestamps"
-            "--incompatible_enable_android_toolchain_resolution=false"
-            "--linkopt=-Wl,--undefined-version"
-            "--linkopt=-Wl,--allow-multiple-definition"
-            "--copt=-D__ANDROID__"
-            "--copt=-UINTEL_MKL"
-            "--override_repository=org_tensorflow=$(pwd)/tensorflow_src"
-          )
-          bazel build //tensorflow_lite_support/java:tensorflow-lite-support "${BUILD_FLAGS[@]}" \
             --verbose_failures
 
-      - name: Locate AAR file
-        id: locate-aar
-        run: |
-          AAR_PATH=$(find bazel-bin/tensorflow_lite_support/java -name "*.aar" | head -n 1)
-          if [ -z "$AAR_PATH" ]; then
-            echo "Error: AAR not found!"
-            exit 1
-          fi
-          echo "aar-path=$AAR_PATH" >> "$GITHUB_OUTPUT"
-          echo "Found AAR at $AAR_PATH"
+          # 准备输出目录
+          mkdir -p gen
+          VERSION=${RELEASE_VERSION:-0.0.0-nightly-SNAPSHOT}
+          find bazel-bin/ -name "*.aar" -exec cp {} gen/ \;
+          EOF
+          chmod +x build.sh
 
-      - name: Upload AAR artifact
+      - name: Run build script
+        run: ./build.sh
+        env:
+          RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
+
+      - name: Upload AAR artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: tflite-support-android-aar-all-arch
-          path: ${{ steps.locate-aar.outputs.aar-path }}
+          name: tflite-support-android-aars
+          path: tflite-support/gen/
           if-no-files-found: error
