@@ -26,29 +26,21 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      # 下载官方用于构建 Android 的 Dockerfile
-      - name: Download TensorFlow Lite Android Dockerfile
-        run: |
-          curl -O https://raw.githubusercontent.com/tensorflow/tensorflow/master/tensorflow/tools/dockerfiles/tflite-android.Dockerfile
-
-      # 构建 Docker 镜像
-      - name: Build Docker image
-        run: |
-          docker build . -t tflite-builder -f tflite-android.Dockerfile
-
-      # 在容器内运行构建，挂载当前目录到 /host_dir
-      - name: Run build inside container
+      # 使用官方 TensorFlow Android 开发镜像
+      - name: Run build inside official android devel container
         run: |
           docker run --rm \
-            -v ${{ github.workspace }}:/host_dir \
-            -w /host_dir \
-            -e ANDROID_HOME=/opt/android/sdk \
-            -e ANDROID_SDK_HOME=/opt/android/sdk \
-            -e ANDROID_NDK_HOME=/opt/android/sdk/ndk-bundle \
-            -e ANDROID_API_LEVEL=21 \
-            -e ANDROID_BUILD_TOOLS_VERSION=30.0.3 \
-            tflite-builder \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            tensorflow/tensorflow:devel-android \
             bash -c "
+              # 设置 Android 环境变量（镜像中已安装 SDK/NDK）
+              export ANDROID_HOME=/opt/android/sdk
+              export ANDROID_SDK_HOME=/opt/android/sdk
+              export ANDROID_NDK_HOME=/opt/android/sdk/ndk-bundle
+              export ANDROID_API_LEVEL=21
+              export ANDROID_BUILD_TOOLS_VERSION=30.0.3
+
               # 接受 Android SDK 许可证
               yes | sdkmanager --licenses > /dev/null 2>&1 || true
 
