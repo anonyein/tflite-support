@@ -1,4 +1,4 @@
-name: Build TFLite Support Android AAR
+name: Build TFLite Support Android AAR (all architectures)
 
 on:
   push:
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   build-and-package:
-    name: "Build TFLite Support AAR"
+    name: "Build TFLite Support AAR (all arch)"
     runs-on: ubuntu-latest
 
     steps:
@@ -71,6 +71,19 @@ jobs:
           sed -i 's/\.to_list()//g' third_party/repo.bzl
           echo "Patched third_party/repo.bzl"
 
+      # 创建 .bazelrc 文件，定义 Android 构建配置，并添加 fat 配置
+      - name: Create .bazelrc with Android configs
+        run: |
+          cat > .bazelrc <<EOF
+          build:android --crosstool_top=//external:android/crosstool
+          build:android --host_crosstool_top=@bazel_tools//tools/cpp:toolchain
+          build:fat --config=android
+          build:fat --fat_apk_cpu=arm64-v8a,armeabi-v7a,x86,x86_64
+          build --enable_platform_specific_config
+          EOF
+          echo "Created .bazelrc:"
+          cat .bazelrc
+
       # 计算 Python 库路径（用于后续环境变量）
       - name: Compute Python library path
         id: python
@@ -81,18 +94,18 @@ jobs:
       - name: Fetch external dependencies with Python env
         run: |
           bazel fetch //tensorflow_lite_support/java:tensorflow-lite-support \
-            --config=android_arm64 \
+            --config=fat \
             --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
             --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
             --repo_env=PYTHON_LIB_PATH=${{ steps.python.outputs.lib_path }} \
             --repo_env=TF_PYTHON_VERSION=3.12 \
             --curses=no
 
-      # 正式构建，同样传递 repo_env 并启用 Android 配置
+      # 正式构建，使用 fat 配置确保生成所有架构的 native 库
       - name: Build TFLite Support AAR
         run: |
           bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
-            --config=android_arm64 \
+            --config=fat \
             --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
             --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
             --repo_env=PYTHON_LIB_PATH=${{ steps.python.outputs.lib_path }} \
@@ -115,7 +128,7 @@ jobs:
       - name: Upload AAR artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tflite-support-android-aar
+          name: tflite-support-android-aar-all-arch
           path: ${{ steps.locate-aar.outputs.aar-path }}
           if-no-files-found: error
 
