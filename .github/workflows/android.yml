@@ -97,18 +97,18 @@ jobs:
           touch unused
 
           # 全面替换 HERMETIC_PYTHON_VERSION 为硬编码字符串 "3.12"
-          # 查找所有包含 HERMETIC_PYTHON_VERSION 的 .bzl 文件并替换
           find . -type f -name "*.bzl" -exec sed -i 's/HERMETIC_PYTHON_VERSION/"3.12"/g' {} \;
 
-          # 同时删除所有对 python_version_repo 的引用
+          # 删除所有对 python_version_repo 的引用
           find . -type f -exec sed -i '/python_version_repo/d' {} \;
           # 删除 load generate_api.bzl 的行
           find . -type f -exec sed -i '/load.*generate_api.bzl/d' {} \;
           # 删除 python_init_ 相关行
           find . -type f -exec sed -i '/python_init_/d' {} \;
 
-          # 设置 NDK 版本为 27
-          sed -i 's/ndk_version =.*/    ndk_version = 27/' third_party/android/android_configure.bzl
+          # 设置 NDK 版本为 27（稳健替换）
+          # 注释掉原有的 ndk_version 行，并添加固定值
+          sed -i '/ndk_version =/c\    # ndk_version = 0  # commented out\n    ndk_version = 27' third_party/android/android_configure.bzl
 
           # 修复 repo.bzl 中的路径问题
           sed -i '/ctx.symlink(ctx.path(ctx.attr._root).dirname.get_child(ctx.attr.path), ".")/c\
@@ -154,7 +154,7 @@ jobs:
           )
           EOF
 
-      # 构建 AAR（禁用 Bzlmod）
+      # 构建 AAR（Bazel 7 默认不使用 Bzlmod，无需显式禁用）
       - name: Build TFLite Support AAR
         run: |
           bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
@@ -162,8 +162,7 @@ jobs:
             --override_repository=org_tensorflow=$(pwd)/tensorflow_src \
             --curses=no \
             --show_timestamps \
-            --verbose_failures \
-            --noenable_bzlmod
+            --verbose_failures
 
       - name: Locate AAR file
         id: locate-aar
