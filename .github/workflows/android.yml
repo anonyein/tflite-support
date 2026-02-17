@@ -1,4 +1,4 @@
-name: Build TFLite Support Android AAR (Final with Fetch)
+name: Build TFLite Support AAR using Official Docker Image
 
 on:
   push:
@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-package:
-    name: "Build TFLite Support AAR (all arch)"
+  build-aar:
+    name: "Build TFLite Support AAR in Docker"
     runs-on: ubuntu-latest
 
     steps:
@@ -26,162 +26,89 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Remove .bazelversion
+      # 下载官方用于构建 Android 的 Dockerfile
+      - name: Download TensorFlow Lite Android Dockerfile
         run: |
-          if [ -f .bazelversion ]; then
-            rm -v .bazelversion
-          fi
+          curl -O https://raw.githubusercontent.com/tensorflow/tensorflow/master/tensorflow/tools/dockerfiles/tflite-android.Dockerfile
 
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Install Bazel 7.0.0
+      # 构建 Docker 镜像
+      - name: Build Docker image
         run: |
-          BAZEL_VERSION=7.0.0
-          wget -q https://github.com/bazelbuild/bazel/releases/download/${BAZEL_VERSION}/bazel-${BAZEL_VERSION}-linux-x86_64 -O bazel
-          chmod +x bazel
-          sudo mv bazel /usr/local/bin/bazel
-          bazel --version
+          docker build . -t tflite-builder -f tflite-android.Dockerfile
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Export Android environment
+      # 在容器内运行构建，挂载当前目录到 /host_dir
+      - name: Run build inside container
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          docker run --rm \
+            -v ${{ github.workspace }}:/host_dir \
+            -w /host_dir \
+            -e ANDROID_HOME=/opt/android/sdk \
+            -e ANDROID_SDK_HOME=/opt/android/sdk \
+            -e ANDROID_NDK_HOME=/opt/android/sdk/ndk-bundle \
+            -e ANDROID_API_LEVEL=21 \
+            -e ANDROID_BUILD_TOOLS_VERSION=30.0.3 \
+            tflite-builder \
+            bash -c "
+              # 接受 Android SDK 许可证
+              yes | sdkmanager --licenses > /dev/null 2>&1 || true
 
-      - name: Cache Bazel external dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/bazel
-          key: ${{ runner.os }}-bazel-${{ hashFiles('WORKSPACE', '**/WORKSPACE', '**/*.bzl') }}
-          restore-keys: |
-            ${{ runner.os }}-bazel-
+              # 配置 TensorFlow（如果需要）
+              if [ -f configure.py ]; then
+                export TF_NEED_ANDROID=1
+                export TF_SET_ANDROID_WORKSPACE=1
+                yes '' | python3 configure.py
+              fi
 
-      - name: Patch BUILD file to use correct rules_java load path
-        run: |
-          sed -i 's|//third_party/bazel_rules/rules_java/java:defs.bzl|@rules_java//java:defs.bzl|' tensorflow_lite_support/java/BUILD
+              # 创建 Android 平台定义（如果不存在）
+              mkdir -p platform
+              cat > platform/BUILD <<'EOF'
+              platform(
+                  name = \"android_arm64_v8a\",
+                  constraint_values = [
+                      \"@platforms//os:android\",
+                      \"@platforms//cpu:arm64\",
+                  ],
+              )
+              platform(
+                  name = \"android_armeabi_v7a\",
+                  constraint_values = [
+                      \"@platforms//os:android\",
+                      \"@platforms//cpu:armv7\",
+                  ],
+              )
+              platform(
+                  name = \"android_x86\",
+                  constraint_values = [
+                      \"@platforms//os:android\",
+                      \"@platforms//cpu:x86_32\",
+                  ],
+              )
+              platform(
+                  name = \"android_x86_64\",
+                  constraint_values = [
+                      \"@platforms//os:android\",
+                      \"@platforms//cpu:x86_64\",
+                  ],
+              )
+              EOF
 
-      - name: Patch third_party/repo.bzl to fix to_list error
-        run: |
-          sed -i 's/\.to_list()//g' third_party/repo.bzl
+              # 计算 Python 库路径
+              PYTHON_LIB_PATH=\$(python3 -c 'import site; print(site.getsitepackages()[0])')
 
-      - name: Download and patch flatbuffers
-        run: |
-          FLATBUFFERS_VERSION="v24.3.7"
-          wget -q https://github.com/google/flatbuffers/archive/${FLATBUFFERS_VERSION}.tar.gz -O flatbuffers.tar.gz
-          mkdir -p flatbuffers_src
-          tar -xzf flatbuffers.tar.gz -C flatbuffers_src --strip-components=1
-          sed -i 's|//third_party/bazel_rules/rules_java/java:java_library.bzl|@rules_java//java:defs.bzl|' flatbuffers_src/build_defs.bzl || true
-          echo "Flatbuffers patched"
+              # 构建 AAR
+              bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
+                --android_platforms=//platform:android_arm64_v8a,//platform:android_armeabi_v7a,//platform:android_x86,//platform:android_x86_64 \
+                --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
+                --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
+                --repo_env=PYTHON_LIB_PATH=\$PYTHON_LIB_PATH \
+                --repo_env=TF_PYTHON_VERSION=3.12 \
+                --curses=no \
+                --show_timestamps \
+                --verbose_failures \
+                --noenable_bzlmod
+            "
 
-      - name: Clone TensorFlow source with submodules
-        run: |
-          TF_COMMIT="777924f5575e7e6e22e4f47be211c2a94f59c4f5"
-          git clone --recursive https://github.com/tensorflow/tensorflow.git tensorflow_src
-          cd tensorflow_src
-          git checkout $TF_COMMIT
-          git submodule update --init --recursive
-          cd ..
-
-      # 创建 unused 文件，解决 vendoring 规则错误
-      - name: Create unused file in tensorflow_src
-        run: |
-          touch tensorflow_src/unused
-
-      - name: Patch TensorFlow BUILD files
-        run: |
-          CONFIG_BUILD="tensorflow_src/tensorflow/lite/acceleration/configuration/BUILD"
-          if [ -f "$CONFIG_BUILD" ]; then
-            sed -i 's|load("@flatbuffers//:build_defs.bzl".*|load("//tensorflow/lite/schema:build_defs.bzl", "flatbuffer_cc_library", "flatbuffer_java_library")|' "$CONFIG_BUILD"
-          else
-            echo "Warning: $CONFIG_BUILD not found"
-          fi
-
-          SCHEMA_BUILD="tensorflow_src/tensorflow/lite/schema/build_defs.bzl"
-          if [ -f "$SCHEMA_BUILD" ]; then
-            if ! grep -q "flatbuffer_android_library" "$SCHEMA_BUILD"; then
-              echo "Adding flatbuffer_android_library to $SCHEMA_BUILD"
-              printf '\n# Added by workflow for compatibility\n' >> "$SCHEMA_BUILD"
-              printf 'def flatbuffer_android_library(name, srcs, deps=[], **kwargs):\n' >> "$SCHEMA_BUILD"
-              printf '    """Alias for flatbuffer_java_library for Android builds."""\n' >> "$SCHEMA_BUILD"
-              printf '    flatbuffer_java_library(name=name, srcs=srcs, deps=deps, **kwargs)\n' >> "$SCHEMA_BUILD"
-            fi
-          fi
-
-      - name: Create Android platform definitions
-        run: |
-          mkdir -p platform
-          cat > platform/BUILD <<EOF
-          platform(
-              name = "android_arm64_v8a",
-              constraint_values = [
-                  "@platforms//os:android",
-                  "@platforms//cpu:arm64",
-              ],
-          )
-          platform(
-              name = "android_armeabi_v7a",
-              constraint_values = [
-                  "@platforms//os:android",
-                  "@platforms//cpu:armv7",
-              ],
-          )
-          platform(
-              name = "android_x86",
-              constraint_values = [
-                  "@platforms//os:android",
-                  "@platforms//cpu:x86_32",
-              ],
-          )
-          platform(
-              name = "android_x86_64",
-              constraint_values = [
-                  "@platforms//os:android",
-                  "@platforms//cpu:x86_64",
-              ],
-          )
-          EOF
-
-      - name: Compute Python library path
-        id: python
-        run: |
-          echo "lib_path=$(python3 -c 'import site; print(site.getsitepackages()[0])')" >> "$GITHUB_OUTPUT"
-
-      # 先拉取所有依赖，确保 Hermetic Python 仓库被正确初始化
-      - name: Fetch external dependencies
-        run: |
-          bazel fetch //tensorflow_lite_support/java:tensorflow-lite-support \
-            --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
-            --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
-            --repo_env=PYTHON_LIB_PATH=${{ steps.python.outputs.lib_path }} \
-            --repo_env=TF_PYTHON_VERSION=3.12 \
-            --repo_env=USE_PYWRAP_RULES=True \
-            --override_repository=flatbuffers=$(pwd)/flatbuffers_src \
-            --override_repository=org_tensorflow=$(pwd)/tensorflow_src \
-            --curses=no \
-            --noenable_bzlmod
-
-      - name: Build TFLite Support AAR
-        run: |
-          bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
-            --android_platforms=//platform:android_arm64_v8a,//platform:android_armeabi_v7a,//platform:android_x86,//platform:android_x86_64 \
-            --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
-            --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
-            --repo_env=PYTHON_LIB_PATH=${{ steps.python.outputs.lib_path }} \
-            --repo_env=TF_PYTHON_VERSION=3.12 \
-            --repo_env=USE_PYWRAP_RULES=True \
-            --override_repository=flatbuffers=$(pwd)/flatbuffers_src \
-            --override_repository=org_tensorflow=$(pwd)/tensorflow_src \
-            --curses=no \
-            --show_timestamps \
-            --verbose_failures \
-            --noenable_bzlmod
-
+      # 定位生成的 AAR 文件
       - name: Locate AAR file
         id: locate-aar
         run: |
@@ -191,6 +118,7 @@ jobs:
             exit 1
           fi
           echo "aar-path=$AAR_PATH" >> "$GITHUB_OUTPUT"
+          echo "Found AAR at $AAR_PATH"
 
       - name: Upload AAR artifact
         uses: actions/upload-artifact@v4
@@ -198,6 +126,3 @@ jobs:
           name: tflite-support-android-aar-all-arch
           path: ${{ steps.locate-aar.outputs.aar-path }}
           if-no-files-found: error
-
-      - name: List output files
-        run: find bazel-bin/tensorflow_lite_support/java -type f || true
