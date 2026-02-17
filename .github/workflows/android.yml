@@ -71,41 +71,32 @@ jobs:
           sed -i 's/\.to_list()//g' third_party/repo.bzl
           echo "Patched third_party/repo.bzl"
 
-      # 创建 .bazelrc 文件，定义 Android 构建配置，并添加 fat 配置
-      - name: Create .bazelrc with Android configs
-        run: |
-          cat > .bazelrc <<EOF
-          build:android --crosstool_top=//external:android/crosstool
-          build:android --host_crosstool_top=@bazel_tools//tools/cpp:toolchain
-          build:fat --config=android
-          build:fat --fat_apk_cpu=arm64-v8a,armeabi-v7a,x86,x86_64
-          build --enable_platform_specific_config
-          EOF
-          echo "Created .bazelrc:"
-          cat .bazelrc
-
-      # 计算 Python 库路径（用于后续环境变量）
+      # 计算 Python 库路径
       - name: Compute Python library path
         id: python
         run: |
           echo "lib_path=$(python3 -c 'import site; print(site.getsitepackages()[0])')" >> "$GITHUB_OUTPUT"
 
-      # 使用 --repo_env 提前拉取所有依赖，确保 Hermetic Python 仓库被正确创建
+      # 使用命令行参数直接 fetch，不依赖 .bazelrc 中的 config
       - name: Fetch external dependencies with Python env
         run: |
           bazel fetch //tensorflow_lite_support/java:tensorflow-lite-support \
-            --config=fat \
+            --crosstool_top=//external:android/crosstool \
+            --host_crosstool_top=@bazel_tools//tools/cpp:toolchain \
+            --fat_apk_cpu=arm64-v8a,armeabi-v7a,x86,x86_64 \
             --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
             --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
             --repo_env=PYTHON_LIB_PATH=${{ steps.python.outputs.lib_path }} \
             --repo_env=TF_PYTHON_VERSION=3.12 \
             --curses=no
 
-      # 正式构建，使用 fat 配置确保生成所有架构的 native 库
+      # 正式构建，使用相同参数
       - name: Build TFLite Support AAR
         run: |
           bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
-            --config=fat \
+            --crosstool_top=//external:android/crosstool \
+            --host_crosstool_top=@bazel_tools//tools/cpp:toolchain \
+            --fat_apk_cpu=arm64-v8a,armeabi-v7a,x86,x86_64 \
             --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
             --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
             --repo_env=PYTHON_LIB_PATH=${{ steps.python.outputs.lib_path }} \
