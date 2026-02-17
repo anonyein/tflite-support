@@ -74,11 +74,23 @@ jobs:
           sed -i 's|//third_party/bazel_rules/rules_java/java:defs.bzl|@rules_java//java:defs.bzl|' tensorflow_lite_support/java/BUILD
           echo "Patched BUILD file"
 
-      # 修补 third_party/repo.bzl 中的 to_list() 错误（flatbuffers 拉取失败问题）
-      - name: Patch third_party/repo.bzl to fix flatbuffers fetch
+      # 修补 third_party/repo.bzl 中的 to_list() 错误
+      - name: Patch third_party/repo.bzl to fix to_list error
         run: |
           sed -i 's/\.to_list()//g' third_party/repo.bzl
           echo "Patched third_party/repo.bzl"
+
+      # 修补 flatbuffers workspace.bzl 添加镜像 URL
+      - name: Patch flatbuffers workspace.bzl to add mirror URL
+        run: |
+          FLATBUFFERS_WORKSPACE="third_party/flatbuffers/workspace.bzl"
+          if [ -f "$FLATBUFFERS_WORKSPACE" ]; then
+            # 在 urls = [ 行后插入镜像URL作为第一项（假设版本为 v2.0.0，可根据实际版本调整）
+            sed -i '/urls = \[/a \        "https://mirror.tensorflow.org/github.com/google/flatbuffers/archive/v2.0.0.tar.gz",' "$FLATBUFFERS_WORKSPACE"
+            echo "Patched $FLATBUFFERS_WORKSPACE"
+          else
+            echo "Warning: $FLATBUFFERS_WORKSPACE not found"
+          fi
 
       # 创建 Android 平台定义（符合 Bazel 7.0+ 规范）
       - name: Create Android platform definitions
