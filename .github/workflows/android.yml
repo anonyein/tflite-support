@@ -49,12 +49,15 @@ jobs:
 
           ENV PATH ${PATH}:${ANDROID_HOME}/tools:${ANDROID_HOME}/tools/bin:${ANDROID_HOME}/platform-tools
 
-          # Install Android NDK r23c (with numeric version in source.properties)
+          # Install Android NDK r23c
           ENV ANDROID_NDK_VERSION r23c
           RUN wget -q https://dl.google.com/android/repository/android-ndk-${ANDROID_NDK_VERSION}-linux.zip && \
               unzip -q android-ndk-${ANDROID_NDK_VERSION}-linux.zip -d /opt && \
               rm android-ndk-${ANDROID_NDK_VERSION}-linux.zip
-          ENV ANDROID_NDK_HOME /opt/android-ndk-${ANDROID_NDK_VERSION}
+
+          # Create a symlink with numeric version to avoid "r23c" string in path
+          RUN ln -s /opt/android-ndk-${ANDROID_NDK_VERSION} /opt/android-ndk-23
+          ENV ANDROID_NDK_HOME /opt/android-ndk-23
           ENV PATH ${PATH}:${ANDROID_NDK_HOME}
 
           # Create source.properties file for NDK (correct numeric version for r23c)
