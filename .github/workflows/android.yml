@@ -1,4 +1,4 @@
-name: Build TFLite Support AAR (Java 17, NDK r27)
+name: Build TFLite Support AAR (Final Attempt - Disable Hermetic Python)
 
 on:
   push:
@@ -32,17 +32,14 @@ jobs:
           #!/bin/bash
           set -ex
 
-          # Install Java 17 (primary) and Java 8 (for sdkmanager)
+          # Install Java 17 and Java 8 (for sdkmanager)
           apt-get update && apt-get install -y openjdk-17-jdk openjdk-8-jre-headless wget unzip
 
-          # Set primary Java to 17
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
           export PATH=$JAVA_HOME/bin:$PATH
-
-          # Java 8 location for sdkmanager
           JAVA8_HOME=/usr/lib/jvm/java-8-openjdk-amd64
 
-          # Install Android SDK using Java 8
+          # Install Android SDK
           mkdir -p /opt/android/sdk
           cd /opt/android/sdk
           wget -q https://dl.google.com/android/repository/sdk-tools-linux-4333796.zip
@@ -59,7 +56,7 @@ jobs:
             $ANDROID_HOME/tools/bin/sdkmanager "platforms;android-21" "build-tools;30.0.3"
           )
 
-          # Install NDK r27 (no Java needed)
+          # Install NDK r27
           cd /opt
           wget -q https://dl.google.com/android/repository/android-ndk-r27-linux.zip
           unzip -q android-ndk-r27-linux.zip
@@ -85,22 +82,20 @@ jobs:
           git submodule update --init --recursive
           touch unused
 
-          # Set environment variables for configure.py
+          # Configure with system Python, disable Hermetic Python
           export TF_NEED_ANDROID=1
           export TF_SET_ANDROID_WORKSPACE=1
-          export HERMETIC_PYTHON_VERSION=3.12
           export PYTHON_BIN_PATH=/usr/bin/python3
           export PYTHON_LIB_PATH=$(python3 -c 'import site; print(site.getsitepackages()[0])')
-          export TF_PYTHON_VERSION=3.12
           export TF_NEED_CLANG=0
           export TF_NEED_CUDA=0
           export TF_NEED_ROCM=0
           export TF_NEED_TENSORRT=0
           export TF_DOWNLOAD_CLANG=0
-          export ANDROID_SDK_HOME=/opt/android/sdk
-          export ANDROID_NDK_HOME=/opt/android-ndk-27
+          # Unset Hermetic Python variables to use system Python
+          unset HERMETIC_PYTHON_VERSION
+          unset TF_PYTHON_VERSION
 
-          # Run configure.py (it will use JAVA_HOME which is 17)
           yes '' | python3 configure.py
 
           # Fix android_configure.bzl: set NDK version to 27
@@ -151,13 +146,9 @@ jobs:
           )
           PLATFORM_EOF
 
-          # Build
+          # Build (use system Python, no Hermetic Python env vars)
           bazel build //tensorflow_lite_support/java:tensorflow-lite-support \
             --android_platforms=//platform:android_arm64_v8a,//platform:android_armeabi_v7a,//platform:android_x86,//platform:android_x86_64 \
-            --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
-            --repo_env=PYTHON_BIN_PATH=/usr/bin/python3 \
-            --repo_env=PYTHON_LIB_PATH=$PYTHON_LIB_PATH \
-            --repo_env=TF_PYTHON_VERSION=3.12 \
             --override_repository=org_tensorflow=/workspace/tensorflow_src \
             --curses=no \
             --show_timestamps \
