@@ -24,7 +24,7 @@ jobs:
             --action_env=ANDROID_HOME=$ANDROID_HOME \
             --action_env=ANDROID_NDK_HOME=$ANDROID_NDK_HOME
       - name: Upload AAR artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: tflite-support-aar
           path: bazel-bin/tensorflow_lite_support/java/*.aar
