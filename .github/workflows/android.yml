@@ -1,4 +1,4 @@
-name: Build TFLite Support AAR (Nuclear Option)
+name: Build TFLite Support AAR (Nuclear Option + xla patch)
 
 on:
   push:
@@ -72,7 +72,7 @@ jobs:
           echo "ANDROID_SDK_API_LEVEL=21" >> $GITHUB_ENV
           echo "$ANDROID_HOME/tools:$ANDROID_HOME/tools/bin:$ANDROID_HOME/platform-tools:$ANDROID_NDK_HOME" >> $GITHUB_PATH
 
-      - name: Clone and brutally patch TensorFlow
+      - name: Clone and brutally patch TensorFlow (including xla)
         run: |
           git clone --recursive https://github.com/tensorflow/tensorflow.git tensorflow_src
           cd tensorflow_src
@@ -80,14 +80,19 @@ jobs:
           git submodule update --init --recursive
           touch unused
 
-          # Delete all references to python_version_repo
+          # 首先修复 xla 中的 python_configure.bzl 问题
+          if [ -f xla/third_party/py/python_configure.bzl ]; then
+            sed -i 's/HERMETIC_PYTHON_VERSION/"3.12"/g' xla/third_party/py/python_configure.bzl
+          fi
+
+          # 删除所有对 python_version_repo 的引用
           find . -type f -exec sed -i '/python_version_repo/d' {} \;
-          # Delete all loads of generate_api.bzl (which indirectly references python_version_repo)
+          # 删除所有 load generate_api.bzl 的行
           find . -type f -exec sed -i '/load.*generate_api.bzl/d' {} \;
-          # Delete any lines containing python_init_ (in case we missed some)
+          # 删除 python_init_ 相关行
           find . -type f -exec sed -i '/python_init_/d' {} \;
 
-          # Apply other necessary patches
+          # 应用其他必要修补
           sed -i 's/ndk_version =.*/    ndk_version = 27/' third_party/android/android_configure.bzl
           sed -i '/ctx.symlink(ctx.path(ctx.attr._root).dirname.get_child(ctx.attr.path), ".")/c\
               # Patched to handle paths with slashes\n    path_parts = ctx.attr.path.split('\''/'\'')\n    p = ctx.path(ctx.attr._root).dirname\n    for part in path_parts:\n        p = p.get_child(part)\n    ctx.symlink(p, ".")' third_party/repo.bzl
